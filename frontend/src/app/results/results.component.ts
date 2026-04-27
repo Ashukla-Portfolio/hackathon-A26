@@ -19,27 +19,36 @@ import { QueryResponse } from '../api.service';
         <pre>{{ response.sql }}</pre>
       </div>
 
-      <div class="section" *ngIf="response.results.length > 0">
-        <h2>Results <span class="count">({{ response.results.length }} rows)</span></h2>
-        <div class="table-wrapper">
-          <table>
-            <thead>
-              <tr>
-                <th *ngFor="let col of columns">{{ col }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr *ngFor="let row of response.results">
-                <td *ngFor="let col of columns">{{ row[col] }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
+     @if (response.results.length > 0) {
+  <div class="section">
+    <h2>Results <span class="count">({{ response.results.length }} rows)</span></h2>
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            @for (col of columns; track col) {
+              <th>{{ col }}</th>
+            }
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of response.results; track $index) {
+            <tr>
+              @for (col of columns; track col) {
+                <td>{{ row[col] }}</td>
+              }
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  </div>
+}
 
-      <p class="empty" *ngIf="response.results.length === 0">
-        Query returned no rows.
-      </p>
+      @if (response.results.length === 0) {
+        <p class="empty">Query returned no rows.</p>
+      }
+
 
     </div>
   `,

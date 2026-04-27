@@ -1,11 +1,10 @@
-import { Component, signal } from '@angular/core';
+import { Component } from '@angular/core';
+import { QueryComponent } from './query/query.component';
 
 @Component({
   selector: 'app-root',
-  imports: [],
-  templateUrl: './app.html',
-  styleUrl: './app.css',
+  standalone: true,
+  imports: [QueryComponent],
+  template: `<app-query />`
 })
-export class App {
-  protected readonly title = signal('agency26-ui');
-}
+export class App {}

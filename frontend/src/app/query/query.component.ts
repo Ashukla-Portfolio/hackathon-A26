@@ -1,9 +1,8 @@
-import { Component } from '@angular/core';
+import { Component, ChangeDetectorRef } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { CommonModule } from '@angular/common';
 import { ApiService, QueryResponse } from '../api.service';
 import { ResultsComponent } from '../results/results.component';
-
 @Component({
   selector: 'app-query',
   standalone: true,
@@ -26,9 +25,12 @@ import { ResultsComponent } from '../results/results.component';
         </button>
       </div>
 
-      <p class="error" *ngIf="error">{{ error }}</p>
-
-      <app-results *ngIf="response" [response]="response" />
+      @if (error) {
+        <p class="error">{{ error }}</p>
+      }
+        @if (response) {
+        <app-results [response]="response" />
+        }
     </div>
   `,
   styles: [`
@@ -86,7 +88,7 @@ export class QueryComponent {
   error = '';
   response: QueryResponse | null = null;
 
-  constructor(private api: ApiService) {}
+  constructor(private api: ApiService, private cdr: ChangeDetectorRef) {}
 
   submit(): void {
     if (!this.question.trim() || this.loading) return;
@@ -97,8 +99,10 @@ export class QueryComponent {
 
     this.api.query(this.question).subscribe({
       next: (res) => {
-        this.response = res;
+        //console.log('response received', res);
         this.loading = false;
+        this.response = { ...res };
+        this.cdr.detectChanges();
       },
       error: (err) => {
         this.error = err?.error?.detail ?? 'Something went wrong. Is the backend running?';
