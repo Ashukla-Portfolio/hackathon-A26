@@ -82,39 +82,9 @@ import { QueryResponse } from '../api.service';
               </div>
             </div>
 
-            <div class="profile-section">
-              <h4>Loop breakdown</h4>
-              <div class="stat-row">
-                <span>2-hop (reciprocal)</span>
-                <span>{{ response.profile['loops_2hop'] }}</span>
-              </div>
-              <div class="stat-row">
-                <span>3-hop</span>
-                <span>{{ response.profile['loops_3hop'] }}</span>
-              </div>
-              <div class="stat-row">
-                <span>4-hop</span>
-                <span>{{ response.profile['loops_4hop'] }}</span>
-              </div>
-              <div class="stat-row">
-                <span>5-hop</span>
-                <span>{{ response.profile['loops_5hop'] }}</span>
-              </div>
-              <div class="stat-row">
-                <span>6-hop</span>
-                <span>{{ response.profile['loops_6hop'] }}</span>
-              </div>
-            </div>
-
           </div>
         </div>
       }
-
-      <!-- Generated SQL -->
-      <div class="section">
-        <h2>Generated SQL</h2>
-        <pre>{{ response.sql }}</pre>
-      </div>
 
       <!-- Results table -->
       @if (response.results.length > 0) {
@@ -125,7 +95,7 @@ import { QueryResponse } from '../api.service';
               <thead>
                 <tr>
                   @for (col of columns; track col) {
-                    <th>{{ col }}</th>
+                    <th>{{ formatColumnName(col) }}</th>
                   }
                 </tr>
               </thead>
@@ -172,15 +142,6 @@ import { QueryResponse } from '../api.service';
     .count { font-weight: 400; text-transform: none; letter-spacing: 0; }
     .year { font-weight: 400; text-transform: none; }
     p { font-size: 15px; line-height: 1.6; color: #1a1a1a; }
-    pre {
-      background: #f5f5f5;
-      padding: 16px;
-      border-radius: 6px;
-      font-size: 13px;
-      overflow-x: auto;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
     .stat-callout {
       background: #f0f7ff;
       border-left: 3px solid #1a73e8;
@@ -209,7 +170,7 @@ import { QueryResponse } from '../api.service';
     .bn { font-size: 13px; color: #888; font-family: monospace; }
     .profile-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(2, 1fr);
       gap: 24px;
     }
     .profile-section { display: flex; flex-direction: column; }
@@ -248,6 +209,13 @@ export class ResultsComponent {
   get columns(): string[] {
     if (this.response.results.length === 0) return [];
     return Object.keys(this.response.results[0]);
+  }
+
+  formatColumnName(col: string): string {
+  if (col.toLowerCase().includes('pct') || col.toLowerCase().includes('percent')) {
+    return '% of 2024 total';
+  }
+  return col.replace(/_/g, ' ');
   }
 
   formatDollars(val: unknown): string {

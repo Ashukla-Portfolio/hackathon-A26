@@ -11,6 +11,9 @@ export interface QueryResponse {
   sql: string;
   results: Record<string, unknown>[];
   summary: string;
+  response_type: 'ranking' | 'profile';
+  percentage_stat: string | null;
+  profile: Record<string, unknown> | null;
 }
 
 @Injectable({
