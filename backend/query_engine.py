@@ -6,12 +6,11 @@ from schema_context import SCHEMA_CONTEXT
 
 load_dotenv()
 
-client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-
+client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", "").strip())
 
 def generate_sql(question: str) -> str:
     message = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-haiku-4-5-20251001",
         max_tokens=1000,
         system=SCHEMA_CONTEXT,
         messages=[
@@ -31,7 +30,7 @@ def generate_summary(question: str, sql: str, results: list[dict]) -> str:
     preview = results[:5]
 
     message = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-haiku-4-5-20251001",
         max_tokens=300,
         messages=[
             {

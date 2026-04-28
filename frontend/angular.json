@@ -57,7 +57,8 @@
               "buildTarget": "agency26-ui:build:production"
             },
             "development": {
-              "buildTarget": "agency26-ui:build:development"
+              "buildTarget": "agency26-ui:build:development",
+              "proxyConfig": "proxy.conf.json"
             }
           },
           "defaultConfiguration": "development"
