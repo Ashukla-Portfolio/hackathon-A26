@@ -4,17 +4,29 @@ import {
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { CommonModule } from '@angular/common';
-import { ApiService, QueryResponse, OrgProfile, DashboardStats } from './api.service';
+import { ApiService, QueryResponse, OrgProfile } from './api.service';
 
 declare const Plotly: any;
 
 const DEFAULT_QUESTION = 'Which charities have the highest accountability risk scores?';
 
 const DB_TOTALS = {
-  total_orgs:     1501,
-  total_loops:    5808,
-  total_circular: 260221334,
-  avg_score:      6.7
+  total_orgs: 1501, total_loops: 5808,
+  total_circular: 260221334, avg_score: 6.7
+};
+
+// Hardcoded trend data from DB queries
+const SECTOR_TREND = {
+  years: [2020, 2021, 2022, 2023, 2024],
+  revenue:      [305276, 334287, 342115, 393960, 442199],   // $M
+  expenditure:  [290780, 307639, 333637, 576709, 408657],   // $M — 2023 spike notable
+};
+
+const LOOP_TREND = {
+  years: [2020, 2021, 2022, 2023, 2024],
+  circular_millions: [236.3, 244.7, 252.8, 250.6, 252.2],
+  orgs_in_loops:     [1412,  1417,  1424,  1428,  1410],
+  avg_score:         [6.7,   6.8,   6.8,   6.8,   6.8],
 };
 
 @Component({
@@ -32,59 +44,98 @@ const DB_TOTALS = {
           <span class="subtitle">Funding Loop Intelligence</span>
         </div>
         <div class="header-right">
-          @if (lastUpdated) {
-            <span class="timestamp">Updated {{ lastUpdated }}</span>
-          }
+          @if (lastUpdated) { <span class="timestamp">Updated {{ lastUpdated }}</span> }
         </div>
       </header>
 
       <!-- Query bar -->
       <div class="query-bar">
-        <textarea
-          class="query-input"
-          [(ngModel)]="question"
-          (keydown.meta.enter)="submit()"
-          (keydown.control.enter)="submit()"
-          placeholder="Ask about circular funding patterns…"
-          rows="2"
-        ></textarea>
+        <textarea class="query-input" [(ngModel)]="question"
+          (keydown.meta.enter)="submit()" (keydown.control.enter)="submit()"
+          placeholder="Ask about circular funding patterns…" rows="2"></textarea>
         <button class="query-btn" (click)="submit()" [disabled]="loading || !question.trim()">
-          @if (loading) { <span class="spinner"></span> }
-          @else { ASK }
+          @if (loading) { <span class="spinner"></span> } @else { ASK }
         </button>
       </div>
 
-      @if (error) {
-        <div class="error-bar">{{ error }}</div>
-      }
+      @if (error) { <div class="error-bar">{{ error }}</div> }
 
-      <!-- DB-level stat callouts — always visible, whole database -->
+      <!-- DB-level stat callouts — always visible -->
       <div class="stats-row">
         <div class="stat-card">
           <div class="stat-value">{{ formatCount(DB_TOTALS.total_loops) }}</div>
           <div class="stat-label">Unique Funding Loops</div>
-          <div class="stat-sub">across full dataset</div>
+          <div class="stat-sub">full dataset</div>
         </div>
         <div class="stat-card">
           <div class="stat-value">{{ formatDollars(DB_TOTALS.total_circular) }}</div>
           <div class="stat-label">Total Circular Flow</div>
-          <div class="stat-sub">across full dataset</div>
+          <div class="stat-sub">full dataset</div>
         </div>
         <div class="stat-card">
           <div class="stat-value">{{ DB_TOTALS.avg_score }}</div>
           <div class="stat-label">Avg Risk Score</div>
-          <div class="stat-sub">across full dataset</div>
+          <div class="stat-sub">full dataset</div>
         </div>
         <div class="stat-card">
           <div class="stat-value">{{ formatCount(DB_TOTALS.total_orgs) }}</div>
-          <div class="stat-label">Organizations in Loops</div>
-          <div class="stat-sub">across full dataset</div>
+          <div class="stat-label">Orgs in Loops</div>
+          <div class="stat-sub">full dataset</div>
         </div>
       </div>
 
+      <!-- Default / overview state — trend charts -->
+      @if (!response && !loading) {
+        <div class="overview">
+
+          <div class="overview-header">
+            <div class="overview-title">Sector Overview — 2020 to 2024</div>
+            <div class="overview-hints">
+              <span class="hint-label">Suggested questions</span>
+              <span class="hint-chip" (click)="setQuestion('Which charities have the highest accountability risk scores?')">
+                Highest risk scores
+              </span>
+              <span class="hint-chip" (click)="setQuestion('Show me government-funded charities involved in funding loops')">
+                Govt-funded orgs in loops
+              </span>
+              <span class="hint-chip" (click)="setQuestion('Which charities have the most reciprocal two-hop funding loops?')">
+                Reciprocal loops
+              </span>
+              <span class="hint-chip" (click)="setQuestion('Which charities have the highest overhead ratios among loop participants?')">
+                High overhead in loops
+              </span>
+            </div>
+          </div>
+
+          <div class="trend-grid">
+
+            <div class="chart-card">
+              <div class="chart-title">Sector Revenue vs Expenditure ($M)</div>
+              <div class="chart-subtitle">
+                2023 expenditure anomaly ($576B) may reflect restatements or reclassifications
+              </div>
+              <div #sectorDiv class="chart-div"></div>
+            </div>
+
+            <div class="chart-card">
+              <div class="chart-title">Circular Funding Activity by Year</div>
+              <div class="chart-subtitle">Organizations in loops and total circular flow</div>
+              <div #loopTrendDiv class="chart-div"></div>
+            </div>
+
+          </div>
+
+          <div class="overview-note">
+            CRA T3010 filings · 2020–2024 · ~84,000 registered Canadian charities ·
+            1,501 identified in circular funding patterns
+          </div>
+
+        </div>
+      }
+
+      <!-- Query results state -->
       @if (response) {
 
-        <!-- Summary + callout strip -->
         <div class="summary-strip">
           <div class="summary-block">
             <span class="summary-text">{{ response.summary }}</span>
@@ -97,55 +148,24 @@ const DB_TOTALS = {
           }
         </div>
 
-        <!-- Charts grid -->
         <div class="charts-grid">
-
           <div class="chart-card chart-bar">
             <div class="chart-title">Top Organizations</div>
-            <div class="chart-subtitle">Click a bar to view org profile</div>
+            <div class="chart-subtitle">Colour = risk level · Click bar to view profile</div>
             <div #barDiv class="chart-div"></div>
           </div>
-
           <div class="chart-card chart-scatter">
             <div class="chart-title">Risk vs Circular Funding</div>
             <div class="chart-subtitle">Dot size = loop count · Click to view profile</div>
             <div #scatterDiv class="chart-div"></div>
           </div>
-
           <div class="chart-card chart-box">
             <div class="chart-title">Loop Length Distribution</div>
             <div class="chart-subtitle">Distribution of hop counts across result set</div>
             <div #boxDiv class="chart-div chart-div-short"></div>
           </div>
-
         </div>
 
-      }
-
-      <!-- Empty / default state -->
-      @if (!response && !loading) {
-        <div class="empty-state">
-          <div class="empty-headline">Explore circular funding in Canadian charities</div>
-          <div class="empty-text">
-            This dataset covers 1,501 organizations across 5,808 unique funding loops
-            representing $260M in circular flow from CRA T3010 filings (2020–2024).
-          </div>
-          <div class="empty-hints-label">Suggested questions</div>
-          <div class="empty-hints">
-            <span (click)="setQuestion('Which charities have the highest accountability risk scores?')">
-              Highest risk scores
-            </span>
-            <span (click)="setQuestion('Show me government-funded charities involved in funding loops')">
-              Govt-funded orgs in loops
-            </span>
-            <span (click)="setQuestion('Which charities have the most reciprocal two-hop funding loops?')">
-              Reciprocal loops
-            </span>
-            <span (click)="setQuestion('Which charities have the highest overhead ratios among loop participants?')">
-              High overhead in loops
-            </span>
-          </div>
-        </div>
       }
 
       <!-- Profile card overlay -->
@@ -157,66 +177,41 @@ const DB_TOTALS = {
             <div class="profile-meta">
               Fiscal Year {{ selectedProfile.fiscal_year }}
               · Risk Score
-              <span [class]="riskClass(selectedProfile.score)">
-                {{ selectedProfile.score }}/30
-              </span>
+              <span [class]="riskClass(selectedProfile.score)">{{ selectedProfile.score }}/30</span>
               @if (selectedProfile.outlier_flag) {
                 <span class="outlier-badge">OVERHEAD OUTLIER</span>
               }
             </div>
 
             <div class="profile-stats">
-              <div class="pstat">
-                <div class="pstat-val">{{ formatDollars(selectedProfile.revenue) }}</div>
-                <div class="pstat-lbl">Revenue</div>
-              </div>
-              <div class="pstat">
-                <div class="pstat-val">{{ formatDollars(selectedProfile.total_circular_amt) }}</div>
-                <div class="pstat-lbl">Circular $</div>
-              </div>
-              <div class="pstat">
-                <div class="pstat-val">{{ selectedProfile.total_loops }}</div>
-                <div class="pstat-lbl">Total Loops</div>
-              </div>
-              <div class="pstat">
-                <div class="pstat-val">{{ formatPct(selectedProfile.broad_overhead_pct) }}</div>
-                <div class="pstat-lbl">Overhead %</div>
-              </div>
-              <div class="pstat">
-                <div class="pstat-val">{{ formatDollars(selectedProfile.circular_inflow) }}</div>
-                <div class="pstat-lbl">Circ. Inflow</div>
-              </div>
-              <div class="pstat">
-                <div class="pstat-val">{{ formatPct(inflowPct(selectedProfile)) }}</div>
-                <div class="pstat-lbl">Inflow / Revenue</div>
-              </div>
-              <div class="pstat">
-                <div class="pstat-val">{{ formatDollars(selectedProfile.program_spending) }}</div>
-                <div class="pstat-lbl">Program Spend</div>
-              </div>
-              <div class="pstat">
-                <div class="pstat-val">{{ formatDollars(selectedProfile.admin_spending) }}</div>
-                <div class="pstat-lbl">Admin Spend</div>
-              </div>
+              <div class="pstat"><div class="pstat-val">{{ formatDollars(selectedProfile.revenue) }}</div><div class="pstat-lbl">Revenue</div></div>
+              <div class="pstat"><div class="pstat-val">{{ formatDollars(selectedProfile.total_circular_amt) }}</div><div class="pstat-lbl">Circular $</div></div>
+              <div class="pstat"><div class="pstat-val">{{ selectedProfile.total_loops }}</div><div class="pstat-lbl">Total Loops</div></div>
+              <div class="pstat"><div class="pstat-val">{{ formatPct(selectedProfile.broad_overhead_pct) }}</div><div class="pstat-lbl">Overhead %</div></div>
+              <div class="pstat"><div class="pstat-val">{{ formatDollars(selectedProfile.circular_inflow) }}</div><div class="pstat-lbl">Circ. Inflow</div></div>
+              <div class="pstat"><div class="pstat-val">{{ formatPct(inflowPct(selectedProfile)) }}</div><div class="pstat-lbl">Inflow / Revenue</div></div>
+              <div class="pstat"><div class="pstat-val">{{ formatDollars(selectedProfile.program_spending) }}</div><div class="pstat-lbl">Program Spend</div></div>
+              <div class="pstat"><div class="pstat-val">{{ formatDollars(selectedProfile.admin_spending) }}</div><div class="pstat-lbl">Admin Spend</div></div>
             </div>
 
-            <!-- Loop breakdown — click to open Sankey -->
-            <div class="loop-breakdown" (click)="openLoopViz()">
+            <div class="loop-breakdown">
               <div class="lb-header">
                 <div class="lb-title">Loop Breakdown</div>
-                <span class="lb-hint">Click to visualize loops →</span>
+                <span class="lb-hint">Click a row to visualize that hop group →</span>
               </div>
               <div class="lb-bars">
                 @for (hop of hopBreakdown(selectedProfile); track hop.label) {
-                  <div class="lb-row">
+                  <div class="lb-row lb-row-clickable"
+                       [class.lb-row-disabled]="hop.count === 0"
+                       (click)="hop.count > 0 && openLoopViz(hop.hops)">
                     <span class="lb-label">{{ hop.label }}</span>
                     <div class="lb-bar-wrap">
-                      <div class="lb-bar"
-                           [style.width]="hop.pct + '%'"
-                           [style.background]="hop.color">
-                      </div>
+                      <div class="lb-bar" [style.width]="hop.pct + '%'" [style.background]="hop.color"></div>
                     </div>
                     <span class="lb-count">{{ hop.count }}</span>
+                    @if (hop.count > 0) {
+                      <span class="lb-arrow">→</span>
+                    }
                   </div>
                 }
               </div>
@@ -226,32 +221,66 @@ const DB_TOTALS = {
         </div>
       }
 
-      <!-- Loop viz overlay (Sankey / Chord) -->
+      <!-- Sankey overlay -->
       @if (showLoopViz && selectedProfile) {
         <div class="profile-overlay" (click)="closeLoopViz()">
           <div class="loopviz-card" (click)="$event.stopPropagation()">
             <div class="loopviz-header">
               <div>
                 <div class="loopviz-title">
-                  Funding Loops — {{ toTitleCase(selectedProfile.legal_name) }}
+                  {{ toTitleCase(selectedProfile.legal_name) }}
+                  — {{ activeHopFilter }}-hop loops
+                  ({{ currentLoopIdx + 1 }} of {{ currentHopGroup.length }})
                 </div>
-                <div class="loopviz-subtitle">
-                  Loop {{ currentLoopIdx + 1 }} of {{ loopData.length }}
-                  · {{ currentLoop?.hops }}-hop
-                  · {{ formatDollars(currentLoop?.total_flow) }} total flow
-                </div>
+                @if (currentLoopGroup) {
+                  <div class="loopviz-subtitle">
+                    {{ formatDollars(currentLoopGroup.total_flow) }} total flow
+                    · {{ currentLoopGroup.min_year }}–{{ currentLoopGroup.max_year }}
+                  </div>
+                  <div class="loopviz-path">{{ currentLoopGroup.path_display }}</div>
+                }
               </div>
               <div class="loopviz-nav">
                 <button (click)="prevLoop(); $event.stopPropagation()"
                         [disabled]="currentLoopIdx === 0">←</button>
                 <button (click)="nextLoop(); $event.stopPropagation()"
-                        [disabled]="currentLoopIdx >= loopData.length - 1">→</button>
+                        [disabled]="atGroupEnd">→</button>
                 <button class="loopviz-close" (click)="closeLoopViz()">✕</button>
               </div>
             </div>
+
+            <!-- End of group verification -->
+            @if (showGroupEnd) {
+              <div class="group-end">
+                <div class="group-end-msg">
+                  You've reviewed all {{ currentHopGroup.length }}
+                  {{ activeHopFilter }}-hop loops.
+                  @if (nextHopFilter) {
+                    Continue to {{ nextHopFilter }}-hop loops?
+                  } @else {
+                    You've reached the end of all loop groups.
+                  }
+                </div>
+                <div class="group-end-actions">
+                  @if (nextHopFilter) {
+                    <button class="gea-yes" (click)="advanceHopGroup(); $event.stopPropagation()">
+                      Yes, show {{ nextHopFilter }}-hop loops
+                    </button>
+                    <button class="gea-skip" (click)="closeLoopViz(); $event.stopPropagation()">
+                      Skip — close
+                    </button>
+                  } @else {
+                    <button class="gea-skip" (click)="closeLoopViz(); $event.stopPropagation()">
+                      Close
+                    </button>
+                  }
+                </div>
+              </div>
+            }
+
             <div #sankeyDiv class="sankey-div"></div>
-            @if (loopData.length === 0) {
-              <div class="loopviz-empty">No loop data available for this organization.</div>
+            @if (currentHopGroup.length === 0) {
+              <div class="loopviz-empty">No loop data available for this hop group.</div>
             }
           </div>
         </div>
@@ -261,425 +290,183 @@ const DB_TOTALS = {
   `,
   styles: [`
     @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
-
     :host { display: block; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
-    .shell {
-      min-height: 100vh;
-      background: #0d0f14;
-      color: #e8eaf0;
-      font-family: 'DM Sans', sans-serif;
-    }
+    .shell { min-height: 100vh; background: #0d0f14; color: #e8eaf0; font-family: 'DM Sans', sans-serif; }
 
-    /* Header */
-    .header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 18px 40px;
-      border-bottom: 1px solid #1e2130;
-      background: #0a0c10;
-    }
+    .header { display: flex; justify-content: space-between; align-items: center; padding: 18px 40px; border-bottom: 1px solid #1e2130; background: #0a0c10; }
     .header-left { display: flex; align-items: center; gap: 12px; }
-    .wordmark {
-      font-family: 'DM Mono', monospace;
-      font-size: 13px;
-      font-weight: 500;
-      letter-spacing: 0.15em;
-      color: #e8b84b;
-    }
+    .wordmark { font-family: 'DM Mono', monospace; font-size: 13px; font-weight: 500; letter-spacing: 0.15em; color: #e8b84b; }
     .divider { color: #2a2d3a; }
     .subtitle { font-size: 13px; color: #6b7280; }
     .timestamp { font-family: 'DM Mono', monospace; font-size: 11px; color: #3d4257; }
 
-    /* Query bar */
-    .query-bar {
-      display: flex;
-      gap: 12px;
-      padding: 20px 40px;
-      background: #0a0c10;
-      border-bottom: 1px solid #1e2130;
-    }
-    .query-input {
-      flex: 1;
-      background: #13161f;
-      border: 1px solid #1e2130;
-      border-radius: 6px;
-      color: #e8eaf0;
-      font-family: 'DM Sans', sans-serif;
-      font-size: 14px;
-      padding: 10px 16px;
-      resize: none;
-      line-height: 1.5;
-      transition: border-color 0.2s;
-    }
+    .query-bar { display: flex; gap: 12px; padding: 20px 40px; background: #0a0c10; border-bottom: 1px solid #1e2130; }
+    .query-input { flex: 1; background: #13161f; border: 1px solid #1e2130; border-radius: 6px; color: #e8eaf0; font-family: 'DM Sans', sans-serif; font-size: 14px; padding: 10px 16px; resize: none; line-height: 1.5; transition: border-color 0.2s; }
     .query-input:focus { outline: none; border-color: #e8b84b; }
     .query-input::placeholder { color: #3d4257; }
-    .query-btn {
-      padding: 0 28px;
-      background: #e8b84b;
-      color: #0a0c10;
-      border: none;
-      border-radius: 6px;
-      font-family: 'DM Mono', monospace;
-      font-size: 12px;
-      font-weight: 500;
-      letter-spacing: 0.1em;
-      cursor: pointer;
-      min-width: 80px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: background 0.15s;
-    }
+    .query-btn { padding: 0 28px; background: #e8b84b; color: #0a0c10; border: none; border-radius: 6px; font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 500; letter-spacing: 0.1em; cursor: pointer; min-width: 80px; display: flex; align-items: center; justify-content: center; transition: background 0.15s; }
     .query-btn:hover:not(:disabled) { background: #f0c95a; }
     .query-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-    .spinner {
-      width: 14px; height: 14px;
-      border: 2px solid #0a0c10;
-      border-top-color: transparent;
-      border-radius: 50%;
-      animation: spin 0.7s linear infinite;
-    }
+    .spinner { width: 14px; height: 14px; border: 2px solid #0a0c10; border-top-color: transparent; border-radius: 50%; animation: spin 0.7s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    .error-bar {
-      background: #2d0f0f; color: #f87171;
-      padding: 10px 40px; font-size: 13px;
-    }
+    .error-bar { background: #2d0f0f; color: #f87171; padding: 10px 40px; font-size: 13px; }
 
-    /* DB-level stats — always visible */
-    .stats-row {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 1px;
-      background: #1e2130;
-      border-bottom: 1px solid #1e2130;
-    }
-    .stat-card {
-      background: #0d0f14;
-      padding: 20px 32px;
-      text-align: center;
-    }
-    .stat-value {
-      font-family: 'DM Mono', monospace;
-      font-size: 26px;
-      font-weight: 500;
-      color: #e8eaf0;
-      line-height: 1;
-      margin-bottom: 6px;
-    }
-    .stat-label {
-      font-size: 11px;
-      color: #4b5268;
-      letter-spacing: 0.07em;
-      text-transform: uppercase;
-    }
-    .stat-sub {
-      font-size: 10px;
-      color: #2a2d3a;
-      margin-top: 3px;
-      font-family: 'DM Mono', monospace;
-    }
+    .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: #1e2130; border-bottom: 1px solid #1e2130; }
+    .stat-card { background: #0d0f14; padding: 20px 32px; text-align: center; }
+    .stat-value { font-family: 'DM Mono', monospace; font-size: 26px; font-weight: 500; color: #e8eaf0; line-height: 1; margin-bottom: 6px; }
+    .stat-label { font-size: 11px; color: #4b5268; letter-spacing: 0.07em; text-transform: uppercase; }
+    .stat-sub { font-size: 10px; color: #2a2d3a; margin-top: 3px; font-family: 'DM Mono', monospace; }
+
+    /* Overview */
+    .overview { padding: 32px 40px; }
+    .overview-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; gap: 24px; flex-wrap: wrap; }
+    .overview-title { font-family: 'DM Mono', monospace; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: #4b5268; padding-top: 4px; }
+    .overview-hints { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .hint-label { font-family: 'DM Mono', monospace; font-size: 10px; color: #2a2d3a; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; }
+    .hint-chip { font-size: 12px; color: #4b5268; border: 1px solid #1e2130; padding: 6px 14px; border-radius: 20px; cursor: pointer; transition: all 0.15s; font-family: 'DM Mono', monospace; white-space: nowrap; }
+    .hint-chip:hover { border-color: #e8b84b; color: #e8b84b; }
+    .trend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: #1e2130; border-radius: 8px; overflow: hidden; }
+    .overview-note { font-size: 11px; color: #2a2d3a; font-family: 'DM Mono', monospace; margin-top: 16px; text-align: center; }
 
     /* Summary strip */
-    .summary-strip {
-      display: flex;
-      align-items: stretch;
-      gap: 0;
-      border-bottom: 1px solid #1e2130;
-    }
-    .summary-block {
-      flex: 1;
-      padding: 14px 40px;
-      background: #0f1218;
-    }
+    .summary-strip { display: flex; align-items: stretch; border-bottom: 1px solid #1e2130; }
+    .summary-block { flex: 1; padding: 14px 40px; background: #0f1218; }
     .summary-text { font-size: 13px; color: #9ca3af; line-height: 1.6; }
-    .visual-callout {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 14px 24px;
-      background: #0f1520;
-      border-left: 1px solid #1e2130;
-      font-size: 12px;
-      color: #e8b84b;
-      font-family: 'DM Mono', monospace;
-      max-width: 340px;
-    }
+    .visual-callout { display: flex; align-items: center; gap: 8px; padding: 14px 24px; background: #0f1520; border-left: 1px solid #1e2130; font-size: 12px; color: #e8b84b; font-family: 'DM Mono', monospace; max-width: 360px; }
     .callout-icon { font-size: 14px; opacity: 0.6; }
 
     /* Charts */
-    .charts-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 1px;
-      background: #1e2130;
-      margin-top: 1px;
-    }
+    .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: #1e2130; margin-top: 1px; }
     .chart-card { background: #0d0f14; padding: 24px 28px; }
-    .chart-bar     { grid-column: 1; grid-row: 1; }
+    .chart-bar { grid-column: 1; grid-row: 1; }
     .chart-scatter { grid-column: 2; grid-row: 1; }
-    .chart-box     { grid-column: 1 / -1; grid-row: 2; }
-
-    .chart-title {
-      font-family: 'DM Mono', monospace;
-      font-size: 11px;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      color: #4b5268;
-      margin-bottom: 2px;
-    }
+    .chart-box { grid-column: 1 / -1; grid-row: 2; }
+    .chart-title { font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: #4b5268; margin-bottom: 2px; }
     .chart-subtitle { font-size: 11px; color: #2a2d3a; margin-bottom: 10px; }
     .chart-div { width: 100%; height: 360px; }
     .chart-div-short { height: 220px; }
 
-    /* Empty state */
-    .empty-state {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 60px 40px;
-      gap: 14px;
-      text-align: center;
-    }
-    .empty-headline {
-      font-size: 18px;
-      font-weight: 500;
-      color: #e8eaf0;
-    }
-    .empty-text {
-      font-size: 13px;
-      color: #4b5268;
-      max-width: 520px;
-      line-height: 1.6;
-    }
-    .empty-hints-label {
-      font-family: 'DM Mono', monospace;
-      font-size: 10px;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      color: #2a2d3a;
-      margin-top: 8px;
-    }
-    .empty-hints {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-      justify-content: center;
-    }
-    .empty-hints span {
-      font-size: 12px;
-      color: #4b5268;
-      border: 1px solid #1e2130;
-      padding: 8px 16px;
-      border-radius: 20px;
-      cursor: pointer;
-      transition: all 0.15s;
-      font-family: 'DM Mono', monospace;
-    }
-    .empty-hints span:hover { border-color: #e8b84b; color: #e8b84b; }
-
     /* Profile overlay */
-    .profile-overlay {
-      position: fixed; inset: 0;
-      background: rgba(0,0,0,0.75);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 100;
-      animation: fadeIn 0.15s ease;
-    }
+    .profile-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 100; animation: fadeIn 0.15s ease; }
     @keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
-
-    .profile-card {
-      background: #13161f;
-      border: 1px solid #1e2130;
-      border-radius: 12px;
-      padding: 32px;
-      width: 640px;
-      max-width: 90vw;
-      max-height: 85vh;
-      overflow-y: auto;
-      position: relative;
-      animation: slideUp 0.2s ease;
-    }
-    @keyframes slideUp {
-      from { transform: translateY(16px); opacity:0; }
-      to   { transform: translateY(0);    opacity:1; }
-    }
-
-    .profile-close {
-      position: absolute; top: 16px; right: 16px;
-      background: none; border: none;
-      color: #4b5268; font-size: 16px;
-      cursor: pointer; padding: 4px 8px; border-radius: 4px;
-    }
+    .profile-card { background: #13161f; border: 1px solid #1e2130; border-radius: 12px; padding: 32px; width: 640px; max-width: 90vw; max-height: 85vh; overflow-y: auto; position: relative; animation: slideUp 0.2s ease; }
+    @keyframes slideUp { from { transform: translateY(16px); opacity:0; } to { transform: translateY(0); opacity:1; } }
+    .profile-close { position: absolute; top: 16px; right: 16px; background: none; border: none; color: #4b5268; font-size: 16px; cursor: pointer; padding: 4px 8px; border-radius: 4px; }
     .profile-close:hover { color: #e8eaf0; }
-
-    .profile-name {
-      font-size: 18px; font-weight: 600; color: #e8eaf0;
-      margin-bottom: 6px; padding-right: 40px; line-height: 1.3;
-    }
-    .profile-meta {
-      font-size: 12px; color: #4b5268;
-      margin-bottom: 24px; font-family: 'DM Mono', monospace;
-      display: flex; align-items: center; gap: 8px;
-    }
-    .risk-low  { color: #4ade80; }
-    .risk-med  { color: #e8b84b; }
-    .risk-high { color: #f87171; }
-    .outlier-badge {
-      font-size: 9px; letter-spacing: 0.08em;
-      background: #2d1515; color: #f87171;
-      border: 1px solid #3d2020;
-      padding: 2px 6px; border-radius: 3px;
-    }
-
-    .profile-stats {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 1px;
-      background: #1e2130;
-      border-radius: 8px;
-      overflow: hidden;
-      margin-bottom: 20px;
-    }
+    .profile-name { font-size: 18px; font-weight: 600; color: #e8eaf0; margin-bottom: 6px; padding-right: 40px; line-height: 1.3; }
+    .profile-meta { font-size: 12px; color: #4b5268; margin-bottom: 24px; font-family: 'DM Mono', monospace; display: flex; align-items: center; gap: 8px; }
+    .risk-low { color: #4ade80; } .risk-med { color: #e8b84b; } .risk-high { color: #f87171; }
+    .outlier-badge { font-size: 9px; letter-spacing: 0.08em; background: #2d1515; color: #f87171; border: 1px solid #3d2020; padding: 2px 6px; border-radius: 3px; }
+    .profile-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: #1e2130; border-radius: 8px; overflow: hidden; margin-bottom: 20px; }
     .pstat { background: #0d0f14; padding: 14px; text-align: center; }
-    .pstat-val {
-      font-family: 'DM Mono', monospace;
-      font-size: 14px; color: #e8eaf0; margin-bottom: 4px;
-    }
-    .pstat-lbl {
-      font-size: 10px; color: #4b5268;
-      text-transform: uppercase; letter-spacing: 0.06em;
-    }
+    .pstat-val { font-family: 'DM Mono', monospace; font-size: 14px; color: #e8eaf0; margin-bottom: 4px; }
+    .pstat-lbl { font-size: 10px; color: #4b5268; text-transform: uppercase; letter-spacing: 0.06em; }
 
     /* Loop breakdown */
-    .loop-breakdown {
-      background: #0a0c10;
-      border: 1px solid #1e2130;
-      border-radius: 8px;
-      padding: 16px;
-      cursor: pointer;
-      transition: border-color 0.15s;
-    }
+    .loop-breakdown { background: #0a0c10; border: 1px solid #1e2130; border-radius: 8px; padding: 16px; cursor: pointer; transition: border-color 0.15s; }
     .loop-breakdown:hover { border-color: #e8b84b; }
-    .lb-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 12px;
-    }
-    .lb-title {
-      font-family: 'DM Mono', monospace;
-      font-size: 10px; letter-spacing: 0.1em;
-      text-transform: uppercase; color: #4b5268;
-    }
+    .lb-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .lb-title { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: #4b5268; }
     .lb-hint { font-size: 11px; color: #2a2d3a; font-family: 'DM Mono', monospace; }
     .loop-breakdown:hover .lb-hint { color: #e8b84b; }
     .lb-bars { display: flex; flex-direction: column; gap: 8px; }
     .lb-row { display: flex; align-items: center; gap: 10px; }
-    .lb-label {
-      font-family: 'DM Mono', monospace;
-      font-size: 11px; color: #6b7280; width: 48px; flex-shrink: 0;
-    }
-    .lb-bar-wrap {
-      flex: 1; height: 6px;
-      background: #1e2130; border-radius: 3px; overflow: hidden;
-    }
+    .lb-label { font-family: 'DM Mono', monospace; font-size: 11px; color: #6b7280; width: 48px; flex-shrink: 0; }
+    .lb-bar-wrap { flex: 1; height: 6px; background: #1e2130; border-radius: 3px; overflow: hidden; }
     .lb-bar { height: 100%; border-radius: 3px; transition: width 0.4s ease; }
-    .lb-count {
-      font-family: 'DM Mono', monospace;
-      font-size: 11px; color: #4b5268; width: 28px; text-align: right;
-    }
+    .lb-count { font-family: 'DM Mono', monospace; font-size: 11px; color: #4b5268; width: 28px; text-align: right; }
 
-    /* Loop viz */
-    .loopviz-card {
-      background: #13161f;
-      border: 1px solid #1e2130;
-      border-radius: 12px;
-      padding: 28px;
-      width: 800px;
-      max-width: 94vw;
-      max-height: 90vh;
-      overflow-y: auto;
-      animation: slideUp 0.2s ease;
-    }
-    .loopviz-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      margin-bottom: 20px;
-    }
-    .loopviz-title {
-      font-size: 15px; font-weight: 600; color: #e8eaf0; margin-bottom: 4px;
-    }
-    .loopviz-subtitle {
-      font-family: 'DM Mono', monospace; font-size: 11px; color: #4b5268;
-    }
-    .loopviz-nav {
-      display: flex; gap: 8px; align-items: center;
-    }
-    .loopviz-nav button {
-      background: #1e2130; border: 1px solid #2a2d3a;
-      color: #9ca3af; padding: 6px 12px;
-      border-radius: 4px; cursor: pointer; font-size: 13px;
-      transition: all 0.15s;
-    }
+    /* Sankey */
+    .loopviz-card { background: #13161f; border: 1px solid #1e2130; border-radius: 12px; padding: 28px; width: 75vw; max-width: 75vw; height: 75vh; max-height: 75vh; display: flex; flex-direction: column; animation: slideUp 0.2s ease; overflow: hidden; }
+    .loopviz-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; flex-shrink: 0; }
+    .loopviz-title { font-size: 15px; font-weight: 600; color: #e8eaf0; margin-bottom: 4px; }
+    .loopviz-subtitle { font-family: 'DM Mono', monospace; font-size: 11px; color: #4b5268; margin-bottom: 4px; }
+    .loopviz-path { font-family: 'DM Mono', monospace; font-size: 11px; color: #3d4257; }
+    .loopviz-nav { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+    .loopviz-nav button { background: #1e2130; border: 1px solid #2a2d3a; color: #9ca3af; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; transition: all 0.15s; }
     .loopviz-nav button:hover:not(:disabled) { border-color: #e8b84b; color: #e8b84b; }
     .loopviz-nav button:disabled { opacity: 0.3; cursor: not-allowed; }
-    .loopviz-close {
-      background: none !important; border: none !important;
-      color: #4b5268 !important; font-size: 16px !important;
-    }
+    .loopviz-close { background: none !important; border: none !important; color: #4b5268 !important; font-size: 16px !important; }
     .loopviz-close:hover { color: #e8eaf0 !important; }
-    .sankey-div { width: 100%; height: 400px; }
+    .sankey-div { width: 100%; flex: 1; min-height: 0; }
     .loopviz-empty { text-align: center; color: #4b5268; padding: 60px; font-size: 13px; }
+    /* Group end prompt */
+    .group-end { background: #0f1520; border: 1px solid #2a3050; border-radius: 8px; padding: 20px 24px; margin-bottom: 16px; flex-shrink: 0; }
+    .group-end-msg { font-size: 13px; color: #9ca3af; margin-bottom: 14px; line-height: 1.5; }
+    .group-end-actions { display: flex; gap: 10px; }
+    .gea-yes { background: #e8b84b; color: #0a0c10; border: none; border-radius: 6px; padding: 8px 20px; font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 500; cursor: pointer; transition: background 0.15s; }
+    .gea-yes:hover { background: #f0c95a; }
+    .gea-skip { background: none; color: #4b5268; border: 1px solid #2a2d3a; border-radius: 6px; padding: 8px 20px; font-family: 'DM Mono', monospace; font-size: 12px; cursor: pointer; transition: all 0.15s; }
+    .gea-skip:hover { border-color: #4b5268; color: #9ca3af; }
+    /* Hop row clickable */
+    .lb-row-clickable { cursor: pointer; padding: 4px 6px; margin: -4px -6px; border-radius: 4px; transition: background 0.12s; }
+    .lb-row-clickable:hover { background: #13161f; }
+    .lb-row-disabled { cursor: default; opacity: 0.35; }
+    .lb-arrow { font-size: 11px; color: #e8b84b; opacity: 0; transition: opacity 0.12s; margin-left: 4px; }
+    .lb-row-clickable:hover .lb-arrow { opacity: 1; }
   `]
 })
 export class DashboardComponent implements OnInit, OnDestroy, AfterViewInit {
-  @ViewChild('barDiv')     barDiv!:     ElementRef<HTMLDivElement>;
-  @ViewChild('scatterDiv') scatterDiv!: ElementRef<HTMLDivElement>;
-  @ViewChild('boxDiv')     boxDiv!:     ElementRef<HTMLDivElement>;
-  @ViewChild('sankeyDiv')  sankeyDiv!:  ElementRef<HTMLDivElement>;
+  @ViewChild('barDiv')       barDiv!:       ElementRef<HTMLDivElement>;
+  @ViewChild('scatterDiv')   scatterDiv!:   ElementRef<HTMLDivElement>;
+  @ViewChild('boxDiv')       boxDiv!:       ElementRef<HTMLDivElement>;
+  @ViewChild('sectorDiv')    sectorDiv!:    ElementRef<HTMLDivElement>;
+  @ViewChild('loopTrendDiv') loopTrendDiv!: ElementRef<HTMLDivElement>;
+  @ViewChild('sankeyDiv')    sankeyDiv!:    ElementRef<HTMLDivElement>;
 
   readonly DB_TOTALS = DB_TOTALS;
 
-  question         = '';
-  loading          = false;
-  error            = '';
-  response:          QueryResponse | null = null;
-  selectedProfile:   OrgProfile   | null = null;
-  showLoopViz      = false;
-  loopData:          any[]        = [];
-  currentLoopIdx   = 0;
-  lastUpdated      = '';
+  question        = '';
+  loading         = false;
+  error           = '';
+  response:         QueryResponse | null = null;
+  selectedProfile:  OrgProfile   | null = null;
+  showLoopViz     = false;
+  allLoopGroups:    Record<number, any[]> = {};  // keyed by hop count
+  loopGroups:       any[]        = [];           // legacy — kept for renderSankey
+  activeHopFilter = 2;
+  currentLoopIdx  = 0;
+  showGroupEnd    = false;
+  lastUpdated     = '';
 
-  private plotlyLayout = {
+  get currentHopGroup(): any[] {
+    return this.allLoopGroups[this.activeHopFilter] ?? [];
+  }
+  get atGroupEnd(): boolean {
+    return this.currentLoopIdx >= this.currentHopGroup.length - 1;
+  }
+  get nextHopFilter(): number | null {
+    const available = Object.keys(this.allLoopGroups).map(Number).sort((a,b) => a-b);
+    const idx = available.indexOf(this.activeHopFilter);
+    return idx >= 0 && idx < available.length - 1 ? available[idx + 1] : null;
+  }
+
+  private plotlyBase = {
     paper_bgcolor: 'transparent',
     plot_bgcolor:  'transparent',
-    font:  { family: 'DM Mono, monospace', color: '#6b7280', size: 11 },
-    margin: { t: 10, b: 40, l: 10, r: 10 },
-    xaxis: { gridcolor: '#1e2130', zerolinecolor: '#1e2130', tickfont: { color: '#4b5268', size: 10 } },
-    yaxis: { gridcolor: '#1e2130', zerolinecolor: '#1e2130', tickfont: { color: '#4b5268', size: 10 } },
+    font:   { family: 'DM Mono, monospace', color: '#6b7280', size: 11 },
+    xaxis:  { gridcolor: '#1e2130', zerolinecolor: '#1e2130', tickfont: { color: '#4b5268', size: 10 } },
+    yaxis:  { gridcolor: '#1e2130', zerolinecolor: '#1e2130', tickfont: { color: '#4b5268', size: 10 } },
     showlegend: false,
   };
 
-  private plotlyConfig = { displayModeBar: false, responsive: true };
+  private cfg = { displayModeBar: false, responsive: true };
 
-  get currentLoop() { return this.loopData[this.currentLoopIdx] ?? null; }
+  get currentLoopGroup() { return this.loopGroups[this.currentLoopIdx] ?? null; }
 
   constructor(private api: ApiService, private cdr: ChangeDetectorRef) {}
 
   ngOnInit() {
-    this.question = DEFAULT_QUESTION;
-    this.submit();
+    // Build trend charts on load
+    setTimeout(() => this.buildTrendCharts(), 100);
   }
 
   ngAfterViewInit() {}
-  ngOnDestroy() { this.purgePlots(); }
+
+  ngOnDestroy() { this.purgeAll(); }
 
   setQuestion(q: string) { this.question = q; this.submit(); }
 
@@ -696,7 +483,7 @@ export class DashboardComponent implements OnInit, OnDestroy, AfterViewInit {
         this.loading     = false;
         this.lastUpdated = new Date().toLocaleTimeString();
         this.cdr.detectChanges();
-        setTimeout(() => this.buildCharts(), 80);
+        setTimeout(() => this.buildQueryCharts(), 80);
       },
       error: (err) => {
         this.error   = err?.error?.detail ?? 'Backend unreachable.';
@@ -706,48 +493,96 @@ export class DashboardComponent implements OnInit, OnDestroy, AfterViewInit {
     });
   }
 
-  clearProfile() {
-    this.selectedProfile = null;
-    this.showLoopViz = false;
-  }
+  clearProfile() { this.selectedProfile = null; this.showLoopViz = false; }
 
-  openLoopViz() {
-    if (!this.selectedProfile) return;
-    this.loadLoopData(this.selectedProfile.bn);
-  }
-
-  closeLoopViz() {
-    this.showLoopViz = false;
-    this.loopData    = [];
-    this.currentLoopIdx = 0;
-  }
-
-  prevLoop() { if (this.currentLoopIdx > 0) { this.currentLoopIdx--; this.renderSankey(); } }
-  nextLoop() {
-    if (this.currentLoopIdx < this.loopData.length - 1) {
-      this.currentLoopIdx++;
-      this.renderSankey();
+  openLoopViz(hopFilter: number = 2) {
+    if (!this.selectedProfile?.bn) return;
+    if (Object.keys(this.allLoopGroups).length > 0) {
+      // Data already loaded — just switch filter
+      this.activeHopFilter = hopFilter;
+      this.currentLoopIdx  = 0;
+      this.showGroupEnd    = false;
+      this.loopGroups      = this.currentHopGroup;
+      this.showLoopViz     = true;
+      this.cdr.detectChanges();
+      setTimeout(() => this.renderSankey(), 80);
+      return;
     }
-  }
-
-  private loadLoopData(bn: string) {
-    this.api.getLoops(bn).subscribe({
-      next: (data) => {
-        this.loopData       = this.groupByLoop(data);
-        this.currentLoopIdx = 0;
-        this.showLoopViz    = true;
+    this.api.getLoops(this.selectedProfile.bn).subscribe({
+      next: (rows) => {
+        const grouped = this.groupLoops(rows);
+        // Organise into hop buckets
+        this.allLoopGroups = {};
+        for (const g of grouped) {
+          const h = g.hops as number;
+          if (!this.allLoopGroups[h]) this.allLoopGroups[h] = [];
+          this.allLoopGroups[h].push(g);
+        }
+        // Sort each bucket by total_flow DESC
+        for (const h of Object.keys(this.allLoopGroups)) {
+          this.allLoopGroups[+h].sort((a: any, b: any) => b.total_flow - a.total_flow);
+        }
+        this.activeHopFilter = hopFilter;
+        this.currentLoopIdx  = 0;
+        this.showGroupEnd    = false;
+        this.loopGroups      = this.currentHopGroup;
+        this.showLoopViz     = true;
         this.cdr.detectChanges();
         setTimeout(() => this.renderSankey(), 80);
       },
       error: () => {
-        this.loopData    = [];
-        this.showLoopViz = true;
+        this.allLoopGroups = {};
+        this.showLoopViz   = true;
         this.cdr.detectChanges();
       }
     });
   }
 
-  private groupByLoop(rows: any[]): any[] {
+  closeLoopViz() {
+    this.showLoopViz    = false;
+    this.allLoopGroups  = {};
+    this.loopGroups     = [];
+    this.currentLoopIdx = 0;
+    this.showGroupEnd   = false;
+  }
+
+  advanceHopGroup() {
+    const next = this.nextHopFilter;
+    if (next === null) return;
+    this.activeHopFilter = next;
+    this.currentLoopIdx  = 0;
+    this.showGroupEnd    = false;
+    this.loopGroups      = this.currentHopGroup;
+    this.cdr.detectChanges();
+    setTimeout(() => this.renderSankey(), 80);
+  }
+
+  prevLoop() {
+    if (this.currentLoopIdx > 0) {
+      this.currentLoopIdx--;
+      this.showGroupEnd = false;
+      this.loopGroups   = this.currentHopGroup;
+      this.cdr.detectChanges();
+      setTimeout(() => this.renderSankey(), 50);
+    }
+  }
+
+  nextLoop() {
+    if (this.atGroupEnd) {
+      this.showGroupEnd = true;
+      this.cdr.detectChanges();
+      return;
+    }
+    this.currentLoopIdx++;
+    this.showGroupEnd = false;
+    this.loopGroups   = this.currentHopGroup;
+    this.cdr.detectChanges();
+    setTimeout(() => this.renderSankey(), 50);
+  }
+
+  // ── Loop data grouping ──────────────────────────────────────
+
+  private groupLoops(rows: any[]): any[] {
     const map = new Map<number, any>();
     for (const r of rows) {
       if (!map.has(r.loop_id)) {
@@ -759,86 +594,196 @@ export class DashboardComponent implements OnInit, OnDestroy, AfterViewInit {
           bottleneck_amt: r.bottleneck_amt,
           min_year:      r.min_year,
           max_year:      r.max_year,
-          edges: []
+          hops_ordered:  []
         });
       }
-      if (r.src_name && r.dst_name) {
-        map.get(r.loop_id).edges.push({
-          src: r.src_name, dst: r.dst_name,
-          flow: r.total_flow / (r.hops || 1)
-        });
-      }
+      map.get(r.loop_id).hops_ordered.push({
+        position: r.position_in_loop,
+        src_name: r.src_name ?? r.src_bn,
+        dst_name: r.dst_name ?? r.dst_bn,
+        hop_flow: Number(r.hop_flow ?? 0)
+      });
+    }
+    // Sort hops by position within each loop
+    for (const loop of map.values()) {
+      loop.hops_ordered.sort((a: any, b: any) => a.position - b.position);
     }
     return Array.from(map.values());
   }
 
+  // ── Sankey renderer ─────────────────────────────────────────
+
   private renderSankey() {
-    if (!this.sankeyDiv?.nativeElement || !this.loopData.length) return;
-    const loop  = this.currentLoop;
-    const edges = loop.edges as { src: string; dst: string; flow: number }[];
-    if (!edges.length) return;
-
-    const useChord = loop.hops < 6;
-
-    // Build unique node list
-    const nodeSet = new Set<string>();
-    edges.forEach(e => { nodeSet.add(e.src); nodeSet.add(e.dst); });
-    const nodes  = Array.from(nodeSet);
-    const nodeIdx = (n: string) => nodes.indexOf(n);
-
-    const truncate = (s: string) => s.length > 25 ? s.slice(0, 23) + '…' : s;
+    const group = this.currentHopGroup;
+    if (!this.sankeyDiv?.nativeElement || !group.length) return;
+    const loop = group[this.currentLoopIdx];
+    if (!loop) return;
 
     try { Plotly.purge(this.sankeyDiv.nativeElement); } catch (_) {}
 
-    const trace: any = {
+    const hops: { src_name: string; dst_name: string; hop_flow: number }[] = loop.hops_ordered;
+    if (!hops.length) return;
+
+    // Build ordered node list preserving path sequence
+    const nodeList: string[] = [];
+    const seen = new Set<string>();
+    for (const h of hops) {
+      if (!seen.has(h.src_name)) { nodeList.push(h.src_name); seen.add(h.src_name); }
+      if (!seen.has(h.dst_name)) { nodeList.push(h.dst_name); seen.add(h.dst_name); }
+    }
+
+    const nodeIdx = (n: string) => nodeList.indexOf(n);
+    const truncate = (s: string) => this.toTitleCase(s.length > 28 ? s.slice(0, 26) + '…' : s);
+
+    // Colour: selected org = amber, others = blue spectrum
+    const selectedName = this.selectedProfile?.legal_name?.toUpperCase() ?? '';
+    const nodeColors = nodeList.map(n =>
+      n.toUpperCase() === selectedName ? '#e8b84b' :
+      `hsl(${210 + nodeList.indexOf(n) * 30}, 55%, 45%)`
+    );
+
+    const trace = {
       type: 'sankey',
       orientation: 'h',
+      arrangement: 'snap',
       node: {
-        pad: 20, thickness: 20,
+        pad: 24,
+        thickness: 18,
         line: { color: '#1e2130', width: 0.5 },
-        label: nodes.map(n => truncate(this.toTitleCase(n))),
-        color: nodes.map((_, i) =>
-          i === 0 ? '#e8b84b' : `hsl(${200 + i * 25}, 60%, 45%)`
-        ),
+        label: nodeList.map(truncate),
+        color: nodeColors,
+        hovertemplate: '<b>%{label}</b><extra></extra>',
       },
       link: {
-        source: edges.map(e => nodeIdx(e.src)),
-        target: edges.map(e => nodeIdx(e.dst)),
-        value:  edges.map(e => Math.max(e.flow, 1)),
-        color:  edges.map(() => 'rgba(232,184,75,0.15)'),
+        source: hops.map(h => nodeIdx(h.src_name)),
+        target: hops.map(h => nodeIdx(h.dst_name)),
+        value:  hops.map(h => Math.max(h.hop_flow, 1)),
+        color:  hops.map(() => 'rgba(232,184,75,0.12)'),
+        hovertemplate: '%{source.label} → %{target.label}<br>$%{value:,.0f}<extra></extra>',
       }
     };
 
     const layout = {
-      ...this.plotlyLayout,
+      ...this.plotlyBase,
       margin: { t: 10, b: 10, l: 10, r: 10 },
     };
 
-    Plotly.newPlot(this.sankeyDiv.nativeElement, [trace], layout, this.plotlyConfig);
+    Plotly.newPlot(this.sankeyDiv.nativeElement, [trace], layout, this.cfg);
   }
 
-  // ── Main chart builders ─────────────────────────────────────
+  // ── Trend charts (default view) ─────────────────────────────
 
-  private purgePlots() {
+  private buildTrendCharts() {
+    this.buildSectorTrend();
+    this.buildLoopTrend();
+  }
+
+  private buildSectorTrend() {
+    if (!this.sectorDiv?.nativeElement) return;
+    const traces = [
+      {
+        type: 'scatter', mode: 'lines+markers',
+        name: 'Revenue',
+        x: SECTOR_TREND.years, y: SECTOR_TREND.revenue,
+        line: { color: '#4ade80', width: 2 },
+        marker: { color: '#4ade80', size: 6 },
+        hovertemplate: '%{x}: $%{y:,.0f}M<extra>Revenue</extra>',
+      },
+      {
+        type: 'scatter', mode: 'lines+markers',
+        name: 'Expenditure',
+        x: SECTOR_TREND.years, y: SECTOR_TREND.expenditure,
+        line: { color: '#f87171', width: 2, dash: 'dot' },
+        marker: { color: '#f87171', size: 6 },
+        hovertemplate: '%{x}: $%{y:,.0f}M<extra>Expenditure</extra>',
+      }
+    ];
+
+    const layout = {
+      ...this.plotlyBase,
+      showlegend: true,
+      legend: { font: { color: '#6b7280', size: 10 }, bgcolor: 'transparent' },
+      margin: { t: 10, b: 40, l: 70, r: 20 },
+      yaxis: {
+        ...this.plotlyBase.yaxis,
+        title: { text: '$M', font: { color: '#4b5268', size: 10 } },
+        tickformat: ',.0f',
+      },
+      xaxis: { ...this.plotlyBase.xaxis, dtick: 1 },
+    };
+
+    Plotly.newPlot(this.sectorDiv.nativeElement, traces, layout, this.cfg);
+  }
+
+  private buildLoopTrend() {
+    if (!this.loopTrendDiv?.nativeElement) return;
+    const traces = [
+      {
+        type: 'scatter', mode: 'lines+markers',
+        name: 'Circular $M',
+        x: LOOP_TREND.years, y: LOOP_TREND.circular_millions,
+        line: { color: '#e8b84b', width: 2 },
+        marker: { color: '#e8b84b', size: 6 },
+        hovertemplate: '%{x}: $%{y:.1f}M<extra>Circular Flow</extra>',
+        yaxis: 'y',
+      },
+      {
+        type: 'bar',
+        name: 'Orgs in Loops',
+        x: LOOP_TREND.years, y: LOOP_TREND.orgs_in_loops,
+        marker: { color: 'rgba(74,222,128,0.25)', line: { color: '#4ade80', width: 1 } },
+        hovertemplate: '%{x}: %{y} orgs<extra>Orgs in Loops</extra>',
+        yaxis: 'y2',
+      }
+    ];
+
+    const layout = {
+      ...this.plotlyBase,
+      showlegend: true,
+      legend: { font: { color: '#6b7280', size: 10 }, bgcolor: 'transparent' },
+      margin: { t: 10, b: 40, l: 60, r: 60 },
+      barmode: 'overlay',
+      xaxis: { ...this.plotlyBase.xaxis, dtick: 1 },
+      yaxis: {
+        ...this.plotlyBase.yaxis,
+        title: { text: 'Circular $M', font: { color: '#4b5268', size: 10 } },
+      },
+      yaxis2: {
+        gridcolor: 'transparent', zerolinecolor: '#1e2130',
+        tickfont: { color: '#4b5268', size: 10 },
+        title: { text: 'Orgs', font: { color: '#4b5268', size: 10 } },
+        overlaying: 'y', side: 'right',
+      },
+    };
+
+    Plotly.newPlot(this.loopTrendDiv.nativeElement, traces, layout, this.cfg);
+  }
+
+  // ── Query result charts ─────────────────────────────────────
+
+  private purgeAll() {
+    try {
+      [this.barDiv, this.scatterDiv, this.boxDiv, this.sectorDiv, this.loopTrendDiv]
+        .forEach(ref => { if (ref?.nativeElement) Plotly.purge(ref.nativeElement); });
+    } catch (_) {}
+  }
+
+  private buildQueryCharts() {
+    if (!this.response) return;
     try {
       if (this.barDiv?.nativeElement)     Plotly.purge(this.barDiv.nativeElement);
       if (this.scatterDiv?.nativeElement) Plotly.purge(this.scatterDiv.nativeElement);
       if (this.boxDiv?.nativeElement)     Plotly.purge(this.boxDiv.nativeElement);
     } catch (_) {}
-  }
-
-  private riskColor(score: number): string {
-    if (score >= 20) return '#f87171';
-    if (score >= 10) return '#e8b84b';
-    return '#4ade80';
-  }
-
-  private buildCharts() {
-    if (!this.response) return;
-    this.purgePlots();
     this.buildBar();
     this.buildScatter();
     this.buildBox();
+  }
+
+  private riskColor(score: number) {
+    if (score >= 20) return '#f87171';
+    if (score >= 10) return '#e8b84b';
+    return '#4ade80';
   }
 
   private buildBar() {
@@ -851,67 +796,49 @@ export class DashboardComponent implements OnInit, OnDestroy, AfterViewInit {
     const values    = results.map(r => Number(r[metricCol] ?? 0)).reverse();
     const scores    = results.map(r => Number(r['accountability_risk'] ?? 0)).reverse();
 
-    const trace = {
+    Plotly.newPlot(this.barDiv.nativeElement, [{
       type: 'bar', orientation: 'h',
       x: values, y: labels,
       marker: { color: scores.map(s => this.riskColor(s)), opacity: 0.85 },
       hovertemplate: '<b>%{y}</b><br>%{x:,.0f}<extra></extra>',
-    };
-
-    const layout = {
-      ...this.plotlyLayout,
+    }], {
+      ...this.plotlyBase,
       margin: { t: 10, b: 40, l: 220, r: 20 },
-      yaxis: { ...this.plotlyLayout.yaxis, automargin: true, tickfont: { color: '#9ca3af', size: 10 } },
-    };
-
-    Plotly.newPlot(this.barDiv.nativeElement, [trace], layout, this.plotlyConfig)
-      .then((el: any) => {
-        el.on('plotly_click', (data: any) => {
-          const idx     = data.points[0].pointIndex;
-          const origIdx = results.length - 1 - idx;
-          this.showProfile(String(results[origIdx]['organization'] ?? ''));
-        });
+      yaxis: { ...this.plotlyBase.yaxis, automargin: true, tickfont: { color: '#9ca3af', size: 10 } },
+    }, this.cfg).then((el: any) => {
+      el.on('plotly_click', (data: any) => {
+        const idx     = data.points[0].pointIndex;
+        const origIdx = results.length - 1 - idx;
+        this.showProfile(String(results[origIdx]['organization'] ?? ''));
       });
+    });
   }
 
   private buildScatter() {
     const results = this.response!.results;
     if (!results.length || !this.scatterDiv?.nativeElement) return;
 
-    const x      = results.map(r => Number(r['circular_amt'] ?? 0));
-    const y      = results.map(r => Number(r['accountability_risk'] ?? 0));
-    const size   = results.map(r => Math.max(8, Math.min(32, Number(r['funding_loops'] ?? 1) * 0.6)));
-    const labels = results.map(r => String(r['organization'] ?? ''));
-    const colors = y.map(s => this.riskColor(s));
-
-    const trace = {
+    Plotly.newPlot(this.scatterDiv.nativeElement, [{
       type: 'scatter', mode: 'markers',
-      x, y, text: labels,
-      marker: { color: colors, size, opacity: 0.8, line: { width: 0 } },
+      x:    results.map(r => Number(r['circular_amt'] ?? 0)),
+      y:    results.map(r => Number(r['accountability_risk'] ?? 0)),
+      text: results.map(r => String(r['organization'] ?? '')),
+      marker: {
+        color: results.map(r => this.riskColor(Number(r['accountability_risk'] ?? 0))),
+        size:  results.map(r => Math.max(8, Math.min(32, Number(r['funding_loops'] ?? 1) * 0.6))),
+        opacity: 0.8, line: { width: 0 }
+      },
       hovertemplate: '<b>%{text}</b><br>Risk: %{y}<br>Circular $: %{x:$,.0f}<extra></extra>',
-    };
-
-    const layout = {
-      ...this.plotlyLayout,
+    }], {
+      ...this.plotlyBase,
       margin: { t: 10, b: 50, l: 60, r: 20 },
-      xaxis: {
-        ...this.plotlyLayout.xaxis,
-        title: { text: 'Circular Flow ($)', font: { color: '#4b5268', size: 10 } },
-        tickformat: '$.2s',
-      },
-      yaxis: {
-        ...this.plotlyLayout.yaxis,
-        title: { text: 'Risk Score (0–30)', font: { color: '#4b5268', size: 10 } },
-        range: [0, 31],
-      },
-    };
-
-    Plotly.newPlot(this.scatterDiv.nativeElement, [trace], layout, this.plotlyConfig)
-      .then((el: any) => {
-        el.on('plotly_click', (data: any) => {
-          this.showProfile(data.points[0].text as string);
-        });
+      xaxis: { ...this.plotlyBase.xaxis, title: { text: 'Circular Flow ($)', font: { color: '#4b5268', size: 10 } }, tickformat: '$.2s' },
+      yaxis: { ...this.plotlyBase.yaxis, title: { text: 'Risk Score (0–30)', font: { color: '#4b5268', size: 10 } }, range: [0, 31] },
+    }, this.cfg).then((el: any) => {
+      el.on('plotly_click', (data: any) => {
+        this.showProfile(data.points[0].text as string);
       });
+    });
   }
 
   private buildBox() {
@@ -922,95 +849,73 @@ export class DashboardComponent implements OnInit, OnDestroy, AfterViewInit {
     const hopLabels = ['2-hop','3-hop','4-hop','5-hop','6-hop'];
     const colors    = ['#4ade80','#86efac','#e8b84b','#fb923c','#f87171'];
 
-    const traces = hopKeys.map((key, i) => {
-      const vals = profiles.flatMap(p => Array(Number(p[key] ?? 0)).fill(i + 2));
-      return {
-        type: 'box', name: hopLabels[i],
-        y: vals.length ? vals : [i + 2],
-        marker: { color: colors[i], size: 4 },
-        line: { color: colors[i] },
-        boxmean: true,
-      };
-    });
+    const traces = hopKeys.map((key, i) => ({
+      type: 'box', name: hopLabels[i],
+      y: profiles.flatMap(p => Array(Number(p[key] ?? 0)).fill(i + 2)).length
+         ? profiles.flatMap(p => Array(Number(p[key] ?? 0)).fill(i + 2))
+         : [i + 2],
+      marker: { color: colors[i], size: 4 },
+      line: { color: colors[i] },
+      boxmean: true,
+    }));
 
-    const layout = {
-      ...this.plotlyLayout,
+    Plotly.newPlot(this.boxDiv.nativeElement, traces, {
+      ...this.plotlyBase,
       margin: { t: 10, b: 40, l: 50, r: 20 },
-      yaxis: {
-        ...this.plotlyLayout.yaxis,
-        title: { text: 'Hop Count', font: { color: '#4b5268', size: 10 } },
-      },
-    };
-
-    Plotly.newPlot(this.boxDiv.nativeElement, traces, layout, this.plotlyConfig);
+      yaxis: { ...this.plotlyBase.yaxis, title: { text: 'Hop Count', font: { color: '#4b5268', size: 10 } } },
+    }, this.cfg);
   }
 
   // ── Helpers ─────────────────────────────────────────────────
 
   private showProfile(orgName: string) {
     const profile = this.response?.profile_data[orgName];
-    if (profile) {
-      this.selectedProfile = profile as OrgProfile;
-      this.cdr.detectChanges();
-    }
+    if (profile) { this.selectedProfile = profile as OrgProfile; this.cdr.detectChanges(); }
   }
 
-   toTitleCase(name: string): string {
-    const lower = new Set([
-      'a','an','and','at','but','by','for','from',
-      'in','nor','of','on','or','the','to','with'
-    ]);
+  toTitleCase(name: string): string {
+    if (!name) return name;
+    const lower = new Set(['a','an','and','at','but','by','for','from','in','nor','of','on','or','the','to','with']);
     return name.split(' ').map((w, i) => {
       const l = w.toLowerCase();
-      return (i === 0 || !lower.has(l))
-        ? l.charAt(0).toUpperCase() + l.slice(1)
-        : l;
+      return (i === 0 || !lower.has(l)) ? l.charAt(0).toUpperCase() + l.slice(1) : l;
     }).join(' ');
   }
 
   hopBreakdown(p: OrgProfile) {
     const hops = [
-      { label: '2-hop', count: p.loops_2hop, color: '#4ade80' },
-      { label: '3-hop', count: p.loops_3hop, color: '#86efac' },
-      { label: '4-hop', count: p.loops_4hop, color: '#e8b84b' },
-      { label: '5-hop', count: p.loops_5hop, color: '#fb923c' },
-      { label: '6-hop', count: p.loops_6hop, color: '#f87171' },
+      { label: '2-hop', hops: 2, count: p.loops_2hop, color: '#4ade80' },
+      { label: '3-hop', hops: 3, count: p.loops_3hop, color: '#86efac' },
+      { label: '4-hop', hops: 4, count: p.loops_4hop, color: '#e8b84b' },
+      { label: '5-hop', hops: 5, count: p.loops_5hop, color: '#fb923c' },
+      { label: '6-hop', hops: 6, count: p.loops_6hop, color: '#f87171' },
     ];
     const max = Math.max(...hops.map(h => h.count), 1);
     return hops.map(h => ({ ...h, pct: (h.count / max) * 100 }));
   }
 
-  riskClass(score: number) {
-    if (score >= 20) return 'risk-high';
-    if (score >= 10) return 'risk-med';
-    return 'risk-low';
-  }
-
-  inflowPct(p: OrgProfile): number {
-    if (!p.revenue || p.revenue === 0) return 0;
-    return (p.circular_inflow / p.revenue) * 100;
-  }
+  riskClass(score: number) { return score >= 20 ? 'risk-high' : score >= 10 ? 'risk-med' : 'risk-low'; }
+  inflowPct(p: OrgProfile) { return !p.revenue ? 0 : (p.circular_inflow / p.revenue) * 100; }
 
   formatDollars(val: unknown): string {
     const n = Number(val);
     if (isNaN(n)) return '—';
-    if (n >= 1_000_000_000) return '$' + (n / 1_000_000_000).toFixed(2) + 'B';
-    if (n >= 1_000_000)     return '$' + (n / 1_000_000).toFixed(2) + 'M';
-    if (n >= 1_000)         return '$' + (n / 1_000).toFixed(1) + 'K';
+    if (n >= 1e9) return '$' + (n/1e9).toFixed(2) + 'B';
+    if (n >= 1e6) return '$' + (n/1e6).toFixed(2) + 'M';
+    if (n >= 1e3) return '$' + (n/1e3).toFixed(1) + 'K';
     return '$' + n.toFixed(0);
   }
 
   formatCount(val: unknown): string {
     const n = Number(val);
     if (isNaN(n)) return '—';
-    if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
-    if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'K';
+    if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
     return String(n);
   }
 
   formatPct(val: unknown): string {
     const n = Number(val);
-    if (isNaN(n)) return '—';
-    return n.toFixed(1) + '%';
+    return isNaN(n) ? '—' : n.toFixed(1) + '%';
   }
 }

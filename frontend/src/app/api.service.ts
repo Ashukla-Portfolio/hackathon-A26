@@ -41,7 +41,6 @@ export interface QueryResponse {
   results: Record<string, unknown>[];
   all_results_count: number;
   summary: string;
-  percentage_stat: string | null;
   visual_callout: string | null;
   profile_data: Record<string, OrgProfile>;
   stats: DashboardStats;

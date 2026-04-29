@@ -1,6 +1,6 @@
 import os
-import re
 import anthropic
+import re
 from dotenv import load_dotenv
 from db import run_query
 from schema_context import SCHEMA_CONTEXT
@@ -10,46 +10,102 @@ load_dotenv()
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", "").strip())
 MODEL = "claude-haiku-4-5-20251001"
 
-# Conjunctions excluded from title case
 _LOWER_WORDS = {
     'a','an','and','at','but','by','for','from','in',
     'nor','of','on','or','the','to','with'
 }
 
+DATASET_AVERAGES = {
+    "accountability_risk": 6.7,
+    "broad_overhead_pct":  56.7,
+    "govt_share_of_rev":   44.8,
+    "govt_pct_revenue":    44.8,
+}
+
+METRIC_LABELS = {
+    "total_circular_amt":  "circular funding",
+    "circular_inflow":     "circular inflow",
+    "circular_outflow":    "circular outflow",
+    "revenue":             "total revenue",
+    "total_expenditures":  "total expenditures",
+    "total_govt_amt":      "government funding",
+    "govt_pct_revenue":    "government share of revenue",
+    "funding_loops":       "funding loop participation",
+    "accountability_risk": "accountability risk score",
+    "broad_overhead_pct":  "broad overhead percentage",
+    "other":               "primary metric",
+}
+
+DENOMINATOR_SQL = {
+    "total_circular_amt":  "SELECT SUM(total_circular_amt) AS total FROM cra.loop_universe",
+    "circular_inflow":     "SELECT SUM(circular_inflow) AS total FROM cra.loop_charity_financials",
+    "circular_outflow":    "SELECT SUM(circular_outflow) AS total FROM cra.loop_charity_financials",
+    "revenue":             "SELECT SUM(total_revenue) AS total FROM cra.vw_charity_financials_by_year WHERE fiscal_year = 2024",
+    "total_expenditures":  "SELECT SUM(total_expenditures) AS total FROM cra.vw_charity_financials_by_year WHERE fiscal_year = 2024",
+    "total_govt_amt":      "SELECT SUM(total_govt) AS total FROM cra.govt_funding_by_charity WHERE fiscal_year = 2024",
+    "funding_loops": """
+        SELECT SUM(lu.total_loops) AS total
+        FROM cra.loop_universe lu
+        JOIN cra.overhead_by_charity o ON o.bn = lu.bn AND o.fiscal_year = 2024
+    """,
+}
+
+AVG_METRIC_TYPES = {"accountability_risk", "broad_overhead_pct", "govt_pct_revenue", "govt_share_of_rev"}
+PCT_METRIC_TYPES = set(DENOMINATOR_SQL.keys())
+
+
 def to_title_case(name: str) -> str:
     if not name:
         return name
-    words = name.split()
-    result = []
-    for i, word in enumerate(words):
-        w = word.lower()
-        if i == 0 or w not in _LOWER_WORDS:
-            result.append(word.capitalize())
-        else:
-            result.append(w)
-    return ' '.join(result)
+    return ' '.join(
+        w.lower() if (i > 0 and w.lower() in _LOWER_WORDS) else w.capitalize()
+        for i, w in enumerate(name.split())
+    )
+
+
+def metric_label(metric_type: str) -> str:
+    return METRIC_LABELS.get(metric_type, metric_type.replace('_', ' '))
 
 
 COLUMN_RULES = """
 Output column rules — follow exactly:
-1. Return exactly 6 columns in this order:
+1. Return exactly 5 columns in this order:
    a. legal_name aliased as "organization"
-   b. primary metric for the question
+   b. primary metric for the question — alias does not matter
    c. total_loops aliased as "funding_loops" (from cra.loop_universe)
    d. total_circular_amt aliased as "circular_amt" (from cra.loop_universe)
    e. score aliased as "accountability_risk" (from cra.loop_universe, 0-30)
-   f. If primary metric is dollars: include pct_of_2024_total as inline subquery
-      ROUND(metric * 100.0 / (SELECT SUM(metric) FROM table WHERE fiscal_year=2024), 2) AS pct_of_2024_total
-      If primary metric is a count: replace col f with one other meaningful numeric column
 
 2. Special cases:
    - Primary metric IS circular_amt: replace col d with total_revenue aliased "revenue"
-   - Primary metric is govt funding: col b = govt_share_of_rev as "govt_pct_revenue", col d = total_govt as "total_govt_amt"
+   - Primary metric is govt funding: col b = govt_share_of_rev as "govt_pct_revenue",
+     col d = total_govt as "total_govt_amt"
 
-3. Never include bn, id, or internal key columns in output.
+3. Never include bn, id, pct, or internal key columns in output.
 4. Always JOIN cra.loop_universe on bn to get cols c, d, e.
 5. Do NOT add LIMIT — the calling code handles row limits.
 """
+
+# Maps substrings in second SQL column to canonical metric types
+_METRIC_SUBSTRING_MAP = [
+    ("circular_inflow",    "circular_inflow"),
+    ("circular_outflow",   "circular_outflow"),
+    ("circular_amt",       "total_circular_amt"),
+    ("total_circular",     "total_circular_amt"),
+    ("total_revenue",      "revenue"),
+    ("field_4700",         "revenue"),
+    ("total_expenditure",  "total_expenditures"),
+    ("field_5100",         "total_expenditures"),
+    ("total_govt",         "total_govt_amt"),
+    ("govt_share",         "govt_pct_revenue"),
+    ("govt_pct",           "govt_pct_revenue"),
+    ("total_loops",        "funding_loops"),
+    ("funding_loops",      "funding_loops"),
+    ("overhead_pct",       "broad_overhead_pct"),
+    ("broad_overhead",     "broad_overhead_pct"),
+    ("score",              "accountability_risk"),
+    ("accountability",     "accountability_risk"),
+]
 
 
 def call_claude(system: str, user: str, max_tokens: int = 1000) -> str:
@@ -71,6 +127,59 @@ def generate_sql(question: str) -> str:
             "Return only the SQL query, no explanation, no markdown, no backticks."
         )
     )
+
+
+def identify_metric_type(question: str, sql: str) -> tuple[str, str]:
+    """
+    Parse the second column from SELECT and map to canonical metric type.
+    Uses substring matching on raw SQL — no Claude call needed.
+    """
+    try:
+        match = re.search(r'SELECT\s+(.*?)\s+FROM', sql, re.IGNORECASE | re.DOTALL)
+        if not match:
+            return "other", "primary metric"
+        cols = [c.strip() for c in match.group(1).split(",")]
+        if len(cols) < 2:
+            return "other", "primary metric"
+        second_col = cols[1].lower()
+        for substring, metric_type in _METRIC_SUBSTRING_MAP:
+            if substring in second_col:
+                return metric_type, METRIC_LABELS.get(metric_type, metric_type.replace("_", " "))
+    except Exception as e:
+        print(f"[METRIC PARSE ERROR] {e}")
+    return "other", "primary metric"
+
+
+def build_visual_callout(metric_type: str, metric_label_str: str,
+                         primary_col: str, top20: list[dict], total_rows: int) -> str:
+
+    if metric_type in PCT_METRIC_TYPES:
+        denom_sql = DENOMINATOR_SQL[metric_type]
+        try:
+            result    = run_query(denom_sql)
+            total_2024 = float(result[0]["total"]) if result and result[0].get("total") else None
+            if total_2024 and total_2024 > 0:
+                top20_sum = sum(float(r[primary_col]) for r in top20 if r.get(primary_col) is not None)
+                pct = round((top20_sum / total_2024) * 100, 1)
+                return (
+                    f"Top {len(top20)} of {total_rows} results — "
+                    f"representing {pct}% of 2024 total {metric_label_str}."
+                )
+        except Exception:
+            pass
+
+    elif metric_type in AVG_METRIC_TYPES:
+        dataset_avg = DATASET_AVERAGES.get(metric_type)
+        if dataset_avg is not None:
+            vals = [float(r[primary_col]) for r in top20 if r.get(primary_col) is not None]
+            if vals:
+                top20_avg = round(sum(vals) / len(vals), 1)
+                return (
+                    f"Top {len(top20)} of {total_rows} results — "
+                    f"avg {metric_label_str}: {top20_avg} vs dataset avg: {dataset_avg}."
+                )
+
+    return f"Showing top {len(top20)} of {total_rows} organizations by {metric_label_str}."
 
 
 def fetch_profile_data(org_names: list[str]) -> dict:
@@ -105,11 +214,10 @@ def fetch_profile_data(org_names: list[str]) -> dict:
 
 
 def fetch_loop_data(bn: str) -> list[dict]:
-    """Fetch all loops and their participants for a given org bn."""
     try:
         return run_query(f"""
             SELECT
-                l.id as loop_id,
+                l.id                                        AS loop_id,
                 l.hops,
                 l.path_display,
                 l.total_flow,
@@ -117,17 +225,23 @@ def fetch_loop_data(bn: str) -> list[dict]:
                 l.min_year,
                 l.max_year,
                 lp.position_in_loop,
-                lp.sends_to,
-                lp.receives_from,
-                lu_src.legal_name as src_name,
-                lu_dst.legal_name as dst_name
+                lp.bn                                       AS src_bn,
+                lp.sends_to                                 AS dst_bn,
+                COALESCE(src_lu.legal_name, lp.bn)          AS src_name,
+                COALESCE(dst_lu.legal_name, lp.sends_to)    AS dst_name,
+                COALESCE(le.total_amt, l.bottleneck_amt, 0) AS hop_flow
             FROM cra.loop_participants lp
             JOIN cra.loops l ON l.id = lp.loop_id
-            LEFT JOIN cra.loop_universe lu_src ON lu_src.bn = lp.sends_to
-            LEFT JOIN cra.loop_universe lu_dst ON lu_dst.bn = lp.receives_from
-            WHERE lp.bn = '{bn}'
-            ORDER BY l.total_flow DESC
-            LIMIT 50
+            LEFT JOIN cra.loop_universe src_lu ON src_lu.bn = lp.bn
+            LEFT JOIN cra.loop_universe dst_lu ON dst_lu.bn = lp.sends_to
+            LEFT JOIN cra.loop_edges le
+                ON le.src = lp.bn AND le.dst = lp.sends_to
+            WHERE lp.loop_id IN (
+                SELECT DISTINCT loop_id FROM cra.loop_participants
+                WHERE bn = '{bn}'
+                ORDER BY loop_id LIMIT 50
+            )
+            ORDER BY l.total_flow DESC, l.id, lp.position_in_loop
         """)
     except Exception:
         return []
@@ -175,54 +289,39 @@ def run_nl_query(question: str) -> dict:
             sql = retry_sql
         except Exception as e2:
             return {
-                "sql": sql,
-                "results": [],
-                "all_results_count": 0,
+                "sql": sql, "results": [], "all_results_count": 0,
                 "summary": f"Query could not be executed: {str(e2)}",
-                "percentage_stat": None,
-                "visual_callout": None,
-                "profile_data": {},
-                "stats": {}
+                "visual_callout": None, "profile_data": {}, "stats": {}
             }
 
-    # Apply title case to organization column
     for r in all_results:
         if "organization" in r and r["organization"]:
             r["organization"] = to_title_case(str(r["organization"]))
 
-    total_rows   = len(all_results)
-    top20        = all_results[:20]
+    total_rows = len(all_results)
+    top20      = all_results[:20]
 
-    # Visual callout — top 20 as % of full result metric
-    visual_callout = None
-    pct_col = next((k for k in (top20[0].keys() if top20 else []) if "pct" in k.lower()), None)
-    if pct_col and top20:
-        top_pct = round(sum(float(r[pct_col]) for r in top20 if r.get(pct_col) is not None), 1)
-        visual_callout = f"Visualizing top 20 of {total_rows} results, representing {top_pct}% of the 2024 total."
-    elif total_rows > 20:
-        visual_callout = f"Visualizing top 20 of {total_rows} matching organizations."
+    # Primary metric column is always index 1
+    primary_col = list(top20[0].keys())[1] if top20 and len(top20[0]) >= 2 else None
 
-    # Percentage stat callout
-    percentage_stat = None
-    if pct_col and top20:
-        top_pct = round(sum(float(r[pct_col]) for r in top20 if r.get(pct_col) is not None), 1)
-        percentage_stat = f"Top 20 account for {top_pct}% of 2024 total."
+    # Identify metric type from SQL — Claude classifies it, not column name matching
+    metric_type, metric_label_str = identify_metric_type(question, sql) if primary_col else ("other", "primary metric")
 
-    # Profile data for top 20
-    org_names   = [r.get("organization", "") for r in top20 if r.get("organization")]
+    visual_callout = build_visual_callout(metric_type, metric_label_str, primary_col, top20, total_rows) if primary_col else None
+
+    org_names    = [r.get("organization", "") for r in top20 if r.get("organization")]
     profile_data = fetch_profile_data(org_names)
 
-    # Dashboard stats (scoped to result set)
     stats = {}
     if top20:
         risk_vals = [float(r.get("accountability_risk", 0)) for r in top20 if r.get("accountability_risk") is not None]
         circ_vals = [float(r.get("circular_amt", 0))        for r in top20 if r.get("circular_amt") is not None]
         loop_vals = [float(r.get("funding_loops", 0))       for r in top20 if r.get("funding_loops") is not None]
         stats = {
-            "total_orgs":     total_rows,
+            "total_orgs":         total_rows,
             "total_circular_amt": sum(circ_vals),
-            "avg_risk_score": round(sum(risk_vals) / len(risk_vals), 1) if risk_vals else 0,
-            "total_loops":    int(sum(loop_vals))
+            "avg_risk_score":     round(sum(risk_vals) / len(risk_vals), 1) if risk_vals else 0,
+            "total_loops":        int(sum(loop_vals))
         }
 
     summary = generate_summary(question, top20, total_rows)
@@ -232,8 +331,19 @@ def run_nl_query(question: str) -> dict:
         "results":           top20,
         "all_results_count": total_rows,
         "summary":           summary,
-        "percentage_stat":   percentage_stat,
         "visual_callout":    visual_callout,
         "profile_data":      profile_data,
         "stats":             stats
     }
+
+# TEST
+if __name__ == "__main__":
+    import re
+    test_sql = "SELECT lu.legal_name AS organization, lu.total_circular_amt, lu.total_loops AS funding_loops, cf.total_revenue AS revenue, lu.score AS accountability_risk FROM cra.loop_universe lu JOIN cra.loop_charity_financials lcf ON lcf.bn = lu.bn ORDER BY lu.total_circular_amt DESC LIMIT 20"
+    # Extract second column
+    select_body = re.search(r'SELECT\s+(.*?)\s+FROM', test_sql, re.IGNORECASE | re.DOTALL)
+    if select_body:
+        cols = [c.strip() for c in select_body.group(1).split(',')]
+        print("COLS:", cols)
+        second = cols[1] if len(cols) > 1 else ""
+        print("SECOND COL:", second)
