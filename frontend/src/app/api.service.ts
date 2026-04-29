@@ -23,7 +23,6 @@ export interface OrgProfile {
   loops_4hop: number;
   loops_5hop: number;
   loops_6hop: number;
-  loops_7plus: number;
   score: number;
   total_circular_amt: number;
   circular_inflow: number;

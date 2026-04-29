@@ -907,9 +907,9 @@ export class DashboardComponent implements OnInit, OnDestroy, AfterViewInit {
     const profiles = Object.values(this.response!.profile_data ?? {}) as any[];
     if (!profiles.length || !this.boxDiv?.nativeElement) return;
 
-    const hopKeys   = ['loops_2hop','loops_3hop','loops_4hop','loops_5hop','loops_6hop','loops_7plus'];
-    const hopLabels = ['2-hop','3-hop','4-hop','5-hop','6-hop','7+ hop'];
-    const colors    = ['#4ade80','#86efac','#e8b84b','#fb923c','#f87171','#c084fc'];
+    const hopKeys   = ['loops_2hop','loops_3hop','loops_4hop','loops_5hop','loops_6hop'];
+    const hopLabels = ['2-hop','3-hop','4-hop','5-hop','6-hop'];
+    const colors    = ['#4ade80','#86efac','#e8b84b','#fb923c','#f87171'];
 
     this.boxHopData = hopKeys.map((key, i) => {
       const orgs = profiles.map(p => ({
@@ -1006,7 +1006,6 @@ export class DashboardComponent implements OnInit, OnDestroy, AfterViewInit {
       { label: '4-hop', hops: 4, count: p.loops_4hop, color: '#e8b84b' },
       { label: '5-hop', hops: 5, count: p.loops_5hop, color: '#fb923c' },
       { label: '6-hop', hops: 6, count: p.loops_6hop, color: '#f87171' },
-      { label: '7+ hop', hops: 7, count: p.loops_7plus, color: '#c084fc' },
     ];
     const max = Math.max(...hops.map(h => h.count), 1);
     return hops.map(h => ({ ...h, pct: (h.count / max) * 100 }));

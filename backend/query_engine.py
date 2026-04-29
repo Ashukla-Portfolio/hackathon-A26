@@ -1,6 +1,5 @@
 import os
 import anthropic
-import re
 from dotenv import load_dotenv
 from db import run_query
 from schema_context import SCHEMA_CONTEXT
@@ -145,8 +144,8 @@ def identify_metric_type(question: str, sql: str) -> tuple[str, str]:
         for substring, metric_type in _METRIC_SUBSTRING_MAP:
             if substring in second_col:
                 return metric_type, METRIC_LABELS.get(metric_type, metric_type.replace("_", " "))
-    except Exception as e:
-        print(f"[METRIC PARSE ERROR] {e}")
+    except Exception:
+        pass
     return "other", "primary metric"
 
 
