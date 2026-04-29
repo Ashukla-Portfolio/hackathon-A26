@@ -39,8 +39,10 @@ export interface OrgProfile {
 export interface QueryResponse {
   sql: string;
   results: Record<string, unknown>[];
+  all_results_count: number;
   summary: string;
   percentage_stat: string | null;
+  visual_callout: string | null;
   profile_data: Record<string, OrgProfile>;
   stats: DashboardStats;
 }
@@ -56,6 +58,10 @@ export class ApiService {
   query(question: string): Observable<QueryResponse> {
     const body: QueryRequest = { question };
     return this.http.post<QueryResponse>(`${this.baseUrl}/query`, body);
+  }
+
+  getLoops(bn: string): Observable<any[]> {
+    return this.http.get<any[]>(`${this.baseUrl}/loops/${bn}`);
   }
 
   health(): Observable<{ status: string }> {
