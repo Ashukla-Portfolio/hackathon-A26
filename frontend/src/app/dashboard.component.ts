@@ -848,21 +848,48 @@ export class DashboardComponent implements OnInit, OnDestroy, AfterViewInit {
     const hopKeys   = ['loops_2hop','loops_3hop','loops_4hop','loops_5hop','loops_6hop'];
     const hopLabels = ['2-hop','3-hop','4-hop','5-hop','6-hop'];
     const colors    = ['#4ade80','#86efac','#e8b84b','#fb923c','#f87171'];
+    const fillColors = [
+      'rgba(74,222,128,0.2)','rgba(134,239,172,0.2)',
+      'rgba(232,184,75,0.2)','rgba(251,146,60,0.2)','rgba(248,113,113,0.2)'
+    ];
 
-    const traces = hopKeys.map((key, i) => ({
-      type: 'box', name: hopLabels[i],
-      y: profiles.flatMap(p => Array(Number(p[key] ?? 0)).fill(i + 2)).length
-         ? profiles.flatMap(p => Array(Number(p[key] ?? 0)).fill(i + 2))
-         : [i + 2],
-      marker: { color: colors[i], size: 4 },
-      line: { color: colors[i] },
-      boxmean: true,
-    }));
+    const traces = hopKeys
+      .map((key, i) => {
+        const vals = profiles.map(p => Number(p[key] ?? 0));
+        if (!vals.some(v => v > 0)) return null;
+        return {
+          type: 'box',
+          name: hopLabels[i],
+          x: vals,                    // horizontal orientation
+          orientation: 'h',
+          boxpoints: false,           // no individual points
+          whiskerwidth: 0,            // no fences — IQR box + median only
+          boxmean: false,
+          marker: { color: colors[i] },
+          line: { color: colors[i], width: 2 },
+          fillcolor: fillColors[i],
+          hovertemplate: '<b>' + hopLabels[i] + '</b><br>' +
+            'Median: %{median}<br>' +
+            'Q1: %{q1}  Q3: %{q3}<br>' +
+            'Min: %{lowerfence}  Max: %{upperfence}' +
+            '<extra></extra>',
+        };
+      })
+      .filter(t => t !== null);
 
     Plotly.newPlot(this.boxDiv.nativeElement, traces, {
       ...this.plotlyBase,
-      margin: { t: 10, b: 40, l: 50, r: 20 },
-      yaxis: { ...this.plotlyBase.yaxis, title: { text: 'Hop Count', font: { color: '#4b5268', size: 10 } } },
+      showlegend: false,
+      margin: { t: 10, b: 40, l: 52, r: 20 },
+      xaxis: {
+        ...this.plotlyBase.xaxis,
+        title: { text: 'Loops per org', font: { color: '#4b5268', size: 10 } },
+      },
+      yaxis: {
+        ...this.plotlyBase.yaxis,
+        automargin: true,
+        tickfont: { color: '#9ca3af', size: 11 },
+      },
     }, this.cfg);
   }
 
