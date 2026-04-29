@@ -213,6 +213,10 @@ def fetch_profile_data(org_names: list[str]) -> dict:
 
 
 def fetch_loop_data(bn: str) -> list[dict]:
+    """
+    Fetch loops for an org, returning up to 20 loops per hop length.
+    Ordered by hops ASC then total_flow DESC so all hop groups are represented.
+    """
     try:
         return run_query(f"""
             SELECT
@@ -236,11 +240,22 @@ def fetch_loop_data(bn: str) -> list[dict]:
             LEFT JOIN cra.loop_edges le
                 ON le.src = lp.bn AND le.dst = lp.sends_to
             WHERE lp.loop_id IN (
-                SELECT DISTINCT loop_id FROM cra.loop_participants
-                WHERE bn = '{bn}'
-                ORDER BY loop_id LIMIT 50
+                SELECT loop_id FROM (
+                    SELECT DISTINCT ON (l2.hops, l2.id)
+                        l2.id AS loop_id,
+                        l2.hops,
+                        l2.total_flow,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY l2.hops
+                            ORDER BY l2.total_flow DESC
+                        ) AS rn
+                    FROM cra.loop_participants lp2
+                    JOIN cra.loops l2 ON l2.id = lp2.loop_id
+                    WHERE lp2.bn = '{bn}'
+                ) ranked
+                WHERE rn <= 20
             )
-            ORDER BY l.total_flow DESC, l.id, lp.position_in_loop
+            ORDER BY l.hops ASC, l.total_flow DESC, l.id, lp.position_in_loop
         """)
     except Exception:
         return []
