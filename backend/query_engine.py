@@ -9,6 +9,26 @@ load_dotenv()
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", "").strip())
 MODEL = "claude-haiku-4-5-20251001"
 
+COLUMN_RULES = """
+Output column rules — you MUST follow these exactly:
+1. Always return exactly these 6 columns in this order:
+   - legal_name aliased as "organization"
+   - primary metric for the question (the main thing being measured)
+   - total_loops aliased as "funding_loops" (from cra.loop_universe)
+   - total_circular_amt aliased as "circular_amt" (from cra.loop_universe)
+   - score aliased as "accountability_risk" (from cra.loop_universe, 0-30)
+   - pct_of_2024_total (only if primary metric is a dollar amount, else omit and use a 5th meaningful column)
+
+2. NEVER include bn, id, or any internal key columns in SELECT output.
+
+3. Special cases:
+   - If primary metric IS total_circular_amt: replace circular_amt with total_revenue aliased as "revenue"
+   - If primary metric is government funding: col 2 = govt_share_of_rev aliased as "govt_pct_of_revenue", col 4 = total_govt aliased as "total_govt_amt"
+
+4. Always JOIN cra.loop_universe to get total_loops, total_circular_amt, score.
+   Join key: lu.bn = <other_table>.bn
+"""
+
 
 def call_claude(system: str, user: str, max_tokens: int = 1000) -> str:
     message = client.messages.create(
@@ -20,82 +40,83 @@ def call_claude(system: str, user: str, max_tokens: int = 1000) -> str:
     return message.content[0].text.strip()
 
 
-def classify_question(question: str) -> str:
-    """Returns 'ranking' or 'profile'."""
-    result = call_claude(
-        system="You classify charity data questions. Reply with exactly one word: 'ranking' if the question asks for a list, top N, or comparison across many charities. Reply with 'profile' if the question asks about a specific named charity or single organization.",
-        user=question,
-        max_tokens=5
+def generate_sql(question: str) -> str:
+    return call_claude(
+        system=SCHEMA_CONTEXT,
+        user=(
+            f"Write a PostgreSQL query to answer this question: {question}\n\n"
+            f"{COLUMN_RULES}\n"
+            "Use LIMIT 20.\n"
+            "Return only the SQL query, no explanation, no markdown, no backticks."
+        )
     )
-    return "profile" if "profile" in result.lower() else "ranking"
 
 
-def generate_sql(question: str, response_type: str) -> str:
-    if response_type == "profile":
-        return call_claude(
-            system=SCHEMA_CONTEXT,
-            user=(
-                f"Question: {question}\n\n"
-                "Write a PostgreSQL query that returns a charity profile including: "
-                "legal_name, bn, fiscal_year, revenue, total_expenditures, "
-                "program_spending, admin_spending, broad_overhead_pct, "
-                "total_loops, loops_2hop, loops_3hop, loops_4hop, loops_5hop, loops_6hop, "
-                "score, total_circular_amt, circular_inflow, circular_outflow. "
-                "Join cra.loop_universe, cra.loop_charity_financials, and cra.overhead_by_charity. "
-                "Use the most recent fiscal_year available for that charity in cra.overhead_by_charity. "
-                "Return only the SQL query, no explanation, no markdown, no backticks."
-            )
-        )
-    else:
-        return call_claude(
-            system=SCHEMA_CONTEXT,
-            user=(
-                f"Write a PostgreSQL query to answer this question: {question}\n\n"
-                "Rules:\n"
-                "1. Use LIMIT 20.\n"
-                "2. If the primary metric being ranked is a dollar amount (revenue, circular funding, expenditures, gifts, etc.), "
-                "include an extra column called pct_of_2024_total computed as:\n"
-                "   ROUND(metric_column * 100.0 / (SELECT SUM(metric_column) FROM relevant_table WHERE fiscal_year = 2024 OR EXTRACT(YEAR FROM fpe) = 2024), 2) AS pct_of_2024_total\n"
-                "   Use the correct table and year filter for that metric. "
-                "   If the metric comes from a table that uses fpe, filter with EXTRACT(YEAR FROM fpe) = 2024. "
-                "   If it uses fiscal_year, filter with fiscal_year = 2024.\n"
-                "3. If the primary metric is a count (loops, hops, directors, etc.), do NOT include pct_of_2024_total.\n"
-                "4. Always alias dollar amount columns clearly.\n"
-                "Return only the SQL query, no explanation, no markdown, no backticks."
-            )
-        )
+def fetch_profile_data(bns: list[str]) -> dict:
+    """Fetch full profile for each bn in the result set."""
+    if not bns:
+        return {}
+    bn_list = ", ".join(f"'{bn}'" for bn in bns)
+    try:
+        rows = run_query(f"""
+            SELECT
+                lu.bn,
+                lu.legal_name,
+                lu.total_loops,
+                lu.loops_2hop,
+                lu.loops_3hop,
+                lu.loops_4hop,
+                lu.loops_5hop,
+                lu.loops_6hop,
+                lu.score,
+                lu.total_circular_amt,
+                lcf.circular_inflow,
+                lcf.circular_outflow,
+                lcf.revenue,
+                lcf.total_expenditures,
+                lcf.program_spending,
+                lcf.admin_spending,
+                o.broad_overhead_pct,
+                o.outlier_flag,
+                o.fiscal_year
+            FROM cra.loop_universe lu
+            LEFT JOIN cra.loop_charity_financials lcf ON lcf.bn = lu.bn
+            LEFT JOIN cra.overhead_by_charity o ON o.bn = lu.bn
+                AND o.fiscal_year = (
+                    SELECT MAX(fiscal_year) FROM cra.overhead_by_charity
+                    WHERE bn = lu.bn
+                )
+            WHERE lu.bn IN ({bn_list})
+        """)
+        return {r["bn"]: r for r in rows}
+    except Exception:
+        return {}
 
 
-def generate_summary(question: str, sql: str, results: list[dict], response_type: str) -> str:
+def generate_summary(question: str, results: list[dict]) -> str:
     if not results:
         return "The query returned no results."
-
     preview = results[:5]
-
     return call_claude(
         system=(
-            "You write plain English summaries of charity data query results. "
+            "You write plain English summaries of charity accountability data. "
             "Rules: "
-            "1. Always attribute numbers to their year — never state an amount without specifying the fiscal year it comes from. "
-            "2. Be specific — include key numbers, names, or amounts from the results. "
-            "3. Do not explain the SQL. "
-            "4. Do not use markdown. "
-            "5. Write 2-3 sentences maximum."
+            "1. Always attribute numbers to their fiscal year. "
+            "2. Be specific — include key names and amounts. "
+            "3. No markdown. "
+            "4. Maximum 2 sentences."
         ),
         user=(
             f"Question: {question}\n"
-            f"Response type: {response_type}\n"
-            f"First {len(preview)} of {len(results)} rows: {preview}\n\n"
-            "Write a summary of what the data shows, attributing all numbers to their fiscal year."
+            f"Sample results (first {len(preview)} of {len(results)} rows): {preview}\n\n"
+            "Summarize what the data shows, attributing all numbers to their fiscal year."
         ),
-        max_tokens=300
+        max_tokens=200
     )
 
 
 def run_nl_query(question: str) -> dict:
-    response_type = classify_question(question)
-
-    sql = generate_sql(question, response_type)
+    sql = generate_sql(question)
 
     try:
         results = run_query(sql)
@@ -103,9 +124,9 @@ def run_nl_query(question: str) -> dict:
         retry_sql = call_claude(
             system=SCHEMA_CONTEXT,
             user=(
-                f"This SQL failed with error: {str(e)}\n\n"
-                f"SQL: {sql}\n\n"
-                "Fix the SQL and return only the corrected query, no explanation, no markdown, no backticks."
+                f"This SQL failed: {str(e)}\n\nSQL: {sql}\n\n"
+                f"{COLUMN_RULES}\n"
+                "Fix and return only the corrected SQL, no markdown, no backticks."
             )
         )
         try:
@@ -113,31 +134,77 @@ def run_nl_query(question: str) -> dict:
             sql = retry_sql
         except Exception as e2:
             return {
-                "sql": retry_sql,
+                "sql": sql,
                 "results": [],
                 "summary": f"Query could not be executed: {str(e2)}",
-                "response_type": response_type,
                 "percentage_stat": None,
-                "profile": None
+                "profile_data": {},
+                "stats": {}
             }
 
-    # Build percentage_stat callout for ranking queries from pct column if present
+    results = results[:20]
+
+    # Compute percentage stat from pct column if present
     percentage_stat = None
-    if response_type == "ranking" and results:
-        pct_col = next((k for k in results[0].keys() if "pct" in k.lower()), None)
-        if pct_col:
-            top_total = sum(float(r[pct_col]) for r in results if r[pct_col] is not None)
-            percentage_stat = f"The top {len(results)} results account for {round(top_total, 1)}% of the 2024 total."
+    pct_col = next((k for k in (results[0].keys() if results else []) if "pct" in k.lower()), None)
+    if pct_col and results:
+        top_total = sum(float(r[pct_col]) for r in results if r.get(pct_col) is not None)
+        percentage_stat = f"Top {len(results)} account for {round(top_total, 1)}% of 2024 total."
 
-    profile = results[0] if response_type == "profile" and results else None
+    # Extract bns from results for profile fetch
+    # Try to find bn from results — not in SELECT but we need it for profiles
+    # Fetch profiles using legal_name match against loop_universe
+    org_names = [r.get("organization", "") for r in results if r.get("organization")]
+    profile_data = {}
+    if org_names:
+        try:
+            name_conditions = " OR ".join(
+                f"lu.legal_name ILIKE '{name.replace(chr(39), chr(39)*2)}'"
+                for name in org_names[:20]
+            )
+            rows = run_query(f"""
+                SELECT
+                    lu.bn, lu.legal_name, lu.total_loops,
+                    lu.loops_2hop, lu.loops_3hop, lu.loops_4hop,
+                    lu.loops_5hop, lu.loops_6hop,
+                    lu.score, lu.total_circular_amt,
+                    lcf.circular_inflow, lcf.circular_outflow,
+                    lcf.revenue, lcf.total_expenditures,
+                    lcf.program_spending, lcf.admin_spending,
+                    o.broad_overhead_pct, o.outlier_flag, o.fiscal_year
+                FROM cra.loop_universe lu
+                LEFT JOIN cra.loop_charity_financials lcf ON lcf.bn = lu.bn
+                LEFT JOIN cra.overhead_by_charity o ON o.bn = lu.bn
+                    AND o.fiscal_year = (
+                        SELECT MAX(fiscal_year) FROM cra.overhead_by_charity
+                        WHERE bn = lu.bn
+                    )
+                WHERE {name_conditions}
+            """)
+            profile_data = {r["legal_name"]: r for r in rows}
+        except Exception:
+            pass
 
-    summary = generate_summary(question, sql, results, response_type)
+    # Dashboard stats
+    stats = {}
+    if results:
+        risk_vals = [float(r.get("accountability_risk", 0)) for r in results if r.get("accountability_risk") is not None]
+        circ_vals = [float(r.get("circular_amt", 0)) for r in results if r.get("circular_amt") is not None]
+        loop_vals = [float(r.get("funding_loops", 0)) for r in results if r.get("funding_loops") is not None]
+        stats = {
+            "total_orgs": len(results),
+            "total_circular_amt": sum(circ_vals),
+            "avg_risk_score": round(sum(risk_vals) / len(risk_vals), 1) if risk_vals else 0,
+            "total_loops": int(sum(loop_vals))
+        }
+
+    summary = generate_summary(question, results)
 
     return {
         "sql": sql,
         "results": results,
         "summary": summary,
-        "response_type": response_type,
         "percentage_stat": percentage_stat,
-        "profile": profile
+        "profile_data": profile_data,
+        "stats": stats
     }

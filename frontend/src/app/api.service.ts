@@ -7,13 +7,42 @@ export interface QueryRequest {
   question: string;
 }
 
+export interface DashboardStats {
+  total_orgs: number;
+  total_circular_amt: number;
+  avg_risk_score: number;
+  total_loops: number;
+}
+
+export interface OrgProfile {
+  bn: string;
+  legal_name: string;
+  total_loops: number;
+  loops_2hop: number;
+  loops_3hop: number;
+  loops_4hop: number;
+  loops_5hop: number;
+  loops_6hop: number;
+  score: number;
+  total_circular_amt: number;
+  circular_inflow: number;
+  circular_outflow: number;
+  revenue: number;
+  total_expenditures: number;
+  program_spending: number;
+  admin_spending: number;
+  broad_overhead_pct: number;
+  outlier_flag: boolean;
+  fiscal_year: number;
+}
+
 export interface QueryResponse {
   sql: string;
   results: Record<string, unknown>[];
   summary: string;
-  response_type: 'ranking' | 'profile';
   percentage_stat: string | null;
-  profile: Record<string, unknown> | null;
+  profile_data: Record<string, OrgProfile>;
+  stats: DashboardStats;
 }
 
 @Injectable({

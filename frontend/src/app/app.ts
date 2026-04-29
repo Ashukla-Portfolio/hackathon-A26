@@ -1,10 +1,10 @@
 import { Component } from '@angular/core';
-import { QueryComponent } from './query/query.component';
+import { DashboardComponent } from './dashboard.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [QueryComponent],
-  template: `<app-query />`
+  imports: [DashboardComponent],
+  template: `<app-dashboard />`
 })
 export class App {}
