@@ -7,7 +7,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:4200"],
+    allow_origins=["http://localhost:4200", "https://hackathon-a26.vercel.app"],
     allow_methods=["POST", "GET"],
     allow_headers=["*"]
 )
@@ -19,25 +19,20 @@ DB_STATS = {
     "avg_score":      6.7
 }
 
-
 class QueryRequest(BaseModel):
     question: str
-
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
-
 @app.get("/stats")
 def stats():
     return DB_STATS
 
-
 @app.get("/loops/{bn}")
 def loops(bn: str):
     return fetch_loop_data(bn)
-
 
 @app.post("/query")
 def query(body: QueryRequest):
