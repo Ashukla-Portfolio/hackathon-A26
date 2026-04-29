@@ -161,8 +161,50 @@ const LOOP_TREND = {
           </div>
           <div class="chart-card chart-box">
             <div class="chart-title">Loop Length Distribution</div>
-            <div class="chart-subtitle">Distribution of hop counts across result set</div>
-            <div #boxDiv class="chart-div chart-div-short"></div>
+            <div class="chart-subtitle">Click a box to explore</div>
+            <div class="box-layout">
+              <div #boxDiv class="box-plot-area"></div>
+              <div class="box-info-panel">
+                @if (!boxSelection) {
+                  <div class="box-info-empty">
+                    <div class="box-info-icon">⬡</div>
+                    <div class="box-info-hint">Click a box to see distribution details</div>
+                  </div>
+                }
+                @if (boxSelection) {
+                  <div class="box-info-label">{{ boxSelection.label }}</div>
+                  <div class="box-info-stats">
+                    <div class="bis-row">
+                      <span class="bis-key">Median</span>
+                      <span class="bis-val">{{ boxSelection.median }}</span>
+                    </div>
+                    <div class="bis-row">
+                      <span class="bis-key">Q1 – Q3</span>
+                      <span class="bis-val">{{ boxSelection.q1 }} – {{ boxSelection.q3 }}</span>
+                    </div>
+                    <div class="bis-row">
+                      <span class="bis-key">Min</span>
+                      <span class="bis-val">{{ boxSelection.min }}</span>
+                    </div>
+                    <div class="bis-row">
+                      <span class="bis-key">Max</span>
+                      <span class="bis-val">{{ boxSelection.max }}</span>
+                    </div>
+                    <div class="bis-row">
+                      <span class="bis-key">Orgs</span>
+                      <span class="bis-val">{{ boxSelection.count }}</span>
+                    </div>
+                  </div>
+                  <div class="bis-divider"></div>
+                  <div class="bis-section-label">Above median</div>
+                  <div class="bis-org-list">
+                    @for (org of boxSelection.aboveMedian; track org) {
+                      <div class="bis-org bis-org-link" (click)="showProfileByName(org)">{{ org }}</div>
+                    }
+                  </div>
+                }
+              </div>
+            </div>
           </div>
         </div>
 
@@ -348,6 +390,24 @@ const LOOP_TREND = {
     .chart-subtitle { font-size: 11px; color: #2a2d3a; margin-bottom: 10px; }
     .chart-div { width: 100%; height: 360px; }
     .chart-div-short { height: 220px; }
+    /* Box plot split layout */
+    .box-layout { display: flex; gap: 0; height: 220px; }
+    .box-plot-area { flex: 0 0 62%; height: 100%; }
+    .box-info-panel { flex: 1; background: #0a0c10; border-left: 1px solid #1e2130; padding: 16px; overflow-y: auto; }
+    .box-info-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 8px; }
+    .box-info-icon { font-size: 20px; color: #1e2130; }
+    .box-info-hint { font-size: 11px; color: #2a2d3a; text-align: center; font-family: 'DM Mono', monospace; }
+    .box-info-label { font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 500; color: #e8b84b; letter-spacing: 0.08em; margin-bottom: 12px; text-transform: uppercase; }
+    .box-info-stats { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+    .bis-row { display: flex; justify-content: space-between; font-size: 11px; }
+    .bis-key { color: #4b5268; font-family: 'DM Mono', monospace; }
+    .bis-val { color: #e8eaf0; font-family: 'DM Mono', monospace; font-weight: 500; }
+    .bis-divider { height: 1px; background: #1e2130; margin: 10px 0; }
+    .bis-section-label { font-size: 10px; color: #2a2d3a; text-transform: uppercase; letter-spacing: 0.08em; font-family: 'DM Mono', monospace; margin-bottom: 6px; }
+    .bis-org-list { display: flex; flex-direction: column; gap: 3px; }
+    .bis-org { font-size: 11px; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .bis-org-link { cursor: pointer; transition: color 0.12s; }
+    .bis-org-link:hover { color: #e8b84b; }
 
     /* Profile overlay */
     .profile-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 100; animation: fadeIn 0.15s ease; }
@@ -431,6 +491,8 @@ export class DashboardComponent implements OnInit, OnDestroy, AfterViewInit {
   currentLoopIdx  = 0;
   showGroupEnd    = false;
   lastUpdated     = '';
+  boxSelection:   any | null = null;
+  boxHopData:     any[]     = [];
 
   get currentHopGroup(): any[] {
     return this.allLoopGroups[this.activeHopFilter] ?? [];
@@ -805,7 +867,7 @@ export class DashboardComponent implements OnInit, OnDestroy, AfterViewInit {
       ...this.plotlyBase,
       margin: { t: 10, b: 40, l: 220, r: 20 },
       yaxis: { ...this.plotlyBase.yaxis, automargin: true, tickfont: { color: '#9ca3af', size: 10 } },
-    }, this.cfg).then((el: any) => {
+    }, { ...this.cfg, scrollZoom: false, doubleClick: false, modeBarButtonsToRemove: ['zoom2d','pan2d','select2d','lasso2d','zoomIn2d','zoomOut2d','autoScale2d','resetScale2d'], displayModeBar: false }).then((el: any) => {
       el.on('plotly_click', (data: any) => {
         const idx     = data.points[0].pointIndex;
         const origIdx = results.length - 1 - idx;
@@ -845,42 +907,50 @@ export class DashboardComponent implements OnInit, OnDestroy, AfterViewInit {
     const profiles = Object.values(this.response!.profile_data ?? {}) as any[];
     if (!profiles.length || !this.boxDiv?.nativeElement) return;
 
-    const hopKeys   = ['loops_2hop','loops_3hop','loops_4hop','loops_5hop','loops_6hop'];
-    const hopLabels = ['2-hop','3-hop','4-hop','5-hop','6-hop'];
-    const colors    = ['#4ade80','#86efac','#e8b84b','#fb923c','#f87171'];
-    const fillColors = [
-      'rgba(74,222,128,0.2)','rgba(134,239,172,0.2)',
-      'rgba(232,184,75,0.2)','rgba(251,146,60,0.2)','rgba(248,113,113,0.2)'
-    ];
+    const hopKeys   = ['loops_2hop','loops_3hop','loops_4hop','loops_5hop','loops_6hop','loops_7plus'];
+    const hopLabels = ['2-hop','3-hop','4-hop','5-hop','6-hop','7+ hop'];
+    const colors    = ['#4ade80','#86efac','#e8b84b','#fb923c','#f87171','#c084fc'];
 
-    const traces = hopKeys
-      .map((key, i) => {
-        const vals = profiles.map(p => Number(p[key] ?? 0));
-        if (!vals.some(v => v > 0)) return null;
-        return {
-          type: 'box',
-          name: hopLabels[i],
-          x: vals,                    // horizontal orientation
-          orientation: 'h',
-          boxpoints: false,           // no individual points
-          whiskerwidth: 0,            // no fences — IQR box + median only
-          boxmean: false,
-          marker: { color: colors[i] },
-          line: { color: colors[i], width: 2 },
-          fillcolor: fillColors[i],
-          hovertemplate: '<b>' + hopLabels[i] + '</b><br>' +
-            'Median: %{median}<br>' +
-            'Q1: %{q1}  Q3: %{q3}<br>' +
-            'Min: %{lowerfence}  Max: %{upperfence}' +
-            '<extra></extra>',
-        };
-      })
-      .filter(t => t !== null);
+    this.boxHopData = hopKeys.map((key, i) => {
+      const orgs = profiles.map(p => ({
+        name: this.toTitleCase(String(p['legal_name'] ?? '')),
+        val:  Number(p[key] ?? 0)
+      })).filter(p => p.val > 0).sort((a, b) => b.val - a.val);
+      return { label: hopLabels[i], key, color: colors[i], orgs };
+    });
+
+    this.boxSelection = null;
+
+    // One trace per hop group — scatter points at y = hop index, x = loop count
+    const traces = this.boxHopData
+      .filter(h => h.orgs.length > 0)
+      .map((h, i) => ({
+        type: 'scatter',
+        mode: 'markers',
+        name: h.label,
+        x: h.orgs.map((o: any) => o.val),
+        y: h.orgs.map(() => h.label),
+        text: h.orgs.map((o: any) => o.name),
+        marker: {
+          color: h.color,
+          size: 10,
+          opacity: 0.8,
+          line: { width: 0 }
+        },
+        hovertemplate: '<b>%{text}</b><br>' + h.label + ': %{x} loops<extra></extra>',
+      }));
 
     Plotly.newPlot(this.boxDiv.nativeElement, traces, {
       ...this.plotlyBase,
       showlegend: false,
-      margin: { t: 10, b: 40, l: 52, r: 20 },
+      margin: { t: 10, b: 40, l: 60, r: 10 },
+      hoverlabel: {
+        bgcolor: '#13161f',
+        bordercolor: '#1e2130',
+        font: { family: 'DM Mono, monospace', size: 11, color: '#e8eaf0' },
+        align: 'left',
+      },
+      hovermode: 'closest',
       xaxis: {
         ...this.plotlyBase.xaxis,
         title: { text: 'Loops per org', font: { color: '#4b5268', size: 10 } },
@@ -890,10 +960,30 @@ export class DashboardComponent implements OnInit, OnDestroy, AfterViewInit {
         automargin: true,
         tickfont: { color: '#9ca3af', size: 11 },
       },
-    }, this.cfg);
+    }, this.cfg).then((el: any) => {
+      el.on('plotly_click', (data: any) => {
+        const pt = data.points[0];
+        const label = pt.data.name as string;
+        const hopEntry = this.boxHopData.find((h: any) => h.label === label);
+        if (!hopEntry) return;
+        const vals = hopEntry.orgs.map((o: any) => o.val as number).sort((a: number, b: number) => a - b);
+        const q1  = vals[Math.floor(vals.length * 0.25)];
+        const med = vals[Math.floor(vals.length * 0.5)];
+        const q3  = vals[Math.floor(vals.length * 0.75)];
+        const aboveMedian = hopEntry.orgs
+          .filter((o: any) => o.val >= med)
+          .slice(0, 8)
+          .map((o: any) => o.name);
+        this.boxSelection = {
+          label, q1, median: med, q3,
+          min: vals[0], max: vals[vals.length - 1],
+          count: vals.length, aboveMedian,
+        };
+        this.cdr.detectChanges();
+      });
+    });
   }
 
-  // ── Helpers ─────────────────────────────────────────────────
 
   private showProfile(orgName: string) {
     const profile = this.response?.profile_data[orgName];
@@ -916,9 +1006,19 @@ export class DashboardComponent implements OnInit, OnDestroy, AfterViewInit {
       { label: '4-hop', hops: 4, count: p.loops_4hop, color: '#e8b84b' },
       { label: '5-hop', hops: 5, count: p.loops_5hop, color: '#fb923c' },
       { label: '6-hop', hops: 6, count: p.loops_6hop, color: '#f87171' },
+      { label: '7+ hop', hops: 7, count: p.loops_7plus, color: '#c084fc' },
     ];
     const max = Math.max(...hops.map(h => h.count), 1);
     return hops.map(h => ({ ...h, pct: (h.count / max) * 100 }));
+  }
+
+  showProfileByName(orgName: string) {
+    if (!this.response) return;
+    const profile = this.response.profile_data[orgName];
+    if (profile) {
+      this.selectedProfile = profile as any;
+      this.cdr.detectChanges();
+    }
   }
 
   riskClass(score: number) { return score >= 20 ? 'risk-high' : score >= 10 ? 'risk-med' : 'risk-low'; }
